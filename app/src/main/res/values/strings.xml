@@ -1,0 +1,142 @@
+<resources>
+    <string name="app_name">MiraBox TV</string>
+
+    <!-- Navigation -->
+    <string name="nav_receiver">Receiver</string>
+    <string name="nav_stage">Mirror Stage</string>
+    <string name="nav_settings">Display &amp; DeX</string>
+    <string name="nav_remote">TV Remote</string>
+
+    <!-- Receiver Status & Hero -->
+    <string name="status_listening">Miracast Sink Ready</string>
+    <string name="status_awaiting_ok">Security Approval Required</string>
+    <string name="status_mirroring">Mirroring Active</string>
+    <string name="status_stopped">Receiver Paused</string>
+    <string name="receiver_subtitle">Connect your Android phone on the same Wi-Fi or via Wi-Fi Direct</string>
+    <string name="receiver_name_label">TV Box Broadcast Name</string>
+    <string name="wifi_ip_label">Wi-Fi IP Address</string>
+    <string name="rtsp_port_label">Miracast RTSP Port</string>
+    <string name="uibc_port_label">UIBC Remote Port</string>
+    <string name="wifi_direct_status_label">Wi-Fi Direct (P2P)</string>
+    <string name="nsd_status_label">LAN Discovery (mDNS)</string>
+    <string name="p2p_ready">Active &amp; Discoverable</string>
+    <string name="p2p_permission_needed">Permission Required</string>
+    <string name="p2p_unavailable">LAN Mode Active</string>
+    <string name="nsd_registered">Broadcasting _miracast._tcp</string>
+    <string name="nsd_pending">Starting Service…</string>
+
+    <!-- Permissions -->
+    <string name="permission_title">Enable Wi-Fi Direct Discovery</string>
+    <string name="permission_desc">Grant nearby Wi-Fi device access so Android phones can discover MiraBox TV directly without cables.</string>
+    <string name="permission_grant_btn">Grant Wi-Fi Permission</string>
+
+    <!-- Connection Instructions & Actions -->
+    <string name="how_to_connect_title">How to Connect Your Phone</string>
+    <string name="step_1">1. Ensure your Android phone is on the same Wi-Fi network as this TV Box.</string>
+    <string name="step_2">2. Open Cast, Smart View, or Wireless Display on your phone and select \"%1$s\".</string>
+    <string name="step_3">3. Press OK on your TV Remote when the security prompt appears on screen.</string>
+    <string name="btn_restart_server">Restart Miracast Server</string>
+    <string name="btn_loopback_test">Run Loopback Pairing Test</string>
+    <string name="btn_open_stage">Open Mirror Stage</string>
+    <string name="btn_disconnect">Disconnect Session</string>
+    <string name="scan_qr_label">LAN Pairing URI</string>
+
+    <!-- Discovered Peers -->
+    <string name="peers_title">Nearby Wi-Fi Direct Phones</string>
+    <string name="peers_empty">Scanning for nearby Wi-Fi Direct / Miracast phones…</string>
+    <string name="btn_scan_peers">Scan Peers</string>
+    <string name="btn_connect_peer">Invite</string>
+
+    <!-- Security Approval Dialog -->
+    <string name="security_title">Incoming Mirroring Request</string>
+    <string name="security_subtitle">Press OK on your TV Remote to allow this phone to mirror onto your TV Box.</string>
+    <string name="security_device_label">Phone Device</string>
+    <string name="security_address_label">Network Address</string>
+    <string name="security_channel_label">Protocol Channel</string>
+    <string name="security_pin_label">Session PIN</string>
+    <string name="security_countdown">Auto-rejecting in %1$ds</string>
+    <string name="security_btn_approve">Approve (OK)</string>
+    <string name="security_btn_trust">Trust &amp; Approve</string>
+    <string name="security_btn_deny">Deny</string>
+
+    <!-- Display & DeX Settings -->
+    <string name="settings_display_section">Display &amp; DeX Transformation</string>
+    <string name="mode_standard_title">Standard Mirror</string>
+    <string name="mode_standard_desc">Original phone aspect ratio and orientation</string>
+    <string name="mode_landscape_title">Force Landscape 16:9</string>
+    <string name="mode_landscape_desc">Rotates portrait phone streams into full widescreen TV broadcast</string>
+    <string name="mode_dex_title">Android TV / DeX Mode</string>
+    <string name="mode_dex_desc">Requests desktop EDID (16:9), adds TV taskbar &amp; remote app control</string>
+
+    <string name="rotation_label">Forced Orientation Transform</string>
+    <string name="rot_auto">Auto Landscape</string>
+    <string name="rot_0">0°</string>
+    <string name="rot_90">90°</string>
+    <string name="rot_270">270°</string>
+
+    <string name="aspect_label">Widescreen Scaling</string>
+    <string name="aspect_fit">Fit 16:9</string>
+    <string name="aspect_fill">Fill Screen</string>
+    <string name="aspect_stretch">Stretch Full</string>
+
+    <string name="dex_profile_label">DeX / Desktop EDID Profile</string>
+    <string name="dex_1080p">1080p • 60Hz (160 DPI)</string>
+    <string name="dex_4k">4K UHD • 30Hz (240 DPI)</string>
+    <string name="dex_720p">720p • 60Hz (120 DPI)</string>
+    <string name="dex_taskbar_toggle">Show Android TV DeX Taskbar</string>
+    <string name="dex_taskbar_desc">Displays desktop dock, quick apps, and Air-Mouse toggle over mirrored screen</string>
+
+    <string name="settings_security_section">Security &amp; Box Identity</string>
+    <string name="security_ok_toggle">Require Remote OK Approval</string>
+    <string name="security_ok_desc">Always ask the TV Box owner to confirm with OK before accepting mirroring</string>
+    <string name="trusted_devices_label">Trusted Phones (%1$d)</string>
+    <string name="trusted_none">No permanently trusted phones saved.</string>
+    <string name="btn_revoke_trust">Revoke</string>
+    <string name="language_label">Interface Language</string>
+    <string name="lang_arabic">العربية</string>
+    <string name="lang_english">English</string>
+
+    <!-- Mirror Stage & DeX Workspace -->
+    <string name="stage_standby_title">Waiting for Phone Video Stream</string>
+    <string name="stage_standby_desc">Connect your phone via Miracast or run the Loopback Pairing Test from Receiver to preview Forced Landscape &amp; DeX TV Mode.</string>
+    <string name="stage_hud_mode">Mode: %1$s</string>
+    <string name="stage_hud_input">Input: %1$s</string>
+    <string name="stage_hud_rotate">Rotate 90°</string>
+    <string name="stage_hud_toggle_mouse">Toggle Air-Mouse</string>
+    <string name="stage_hud_controls">HUD Controls</string>
+    <string name="dex_workspace_badge">DeX TV Workspace • %1$s</string>
+    <string name="landscape_forced_badge">Forced Landscape 16:9</string>
+    <string name="loopback_banner">Local Loopback Diagnostic Stream • UIBC &amp; Transforms Live</string>
+
+    <!-- TV Remote & UIBC -->
+    <string name="remote_title">TV Remote Control Forwarding (UIBC)</string>
+    <string name="remote_subtitle">Control mirrored phone apps directly using your Android TV Box remote control.</string>
+    <string name="uibc_mode_label">Remote Input Injection Mode</string>
+    <string name="uibc_hybrid">Hybrid (D-Pad + Mouse)</string>
+    <string name="uibc_dpad">Direct D-Pad Keys</string>
+    <string name="uibc_mouse">Air-Mouse Pointer</string>
+    <string name="cursor_speed_label">Air-Mouse Pointer Speed</string>
+    <string name="uibc_telemetry_title">Live UIBC Back-Channel Telemetry</string>
+    <string name="uibc_packets_sent">Packets Sent: %1$d</string>
+    <string name="uibc_last_event">Last Event: %1$s</string>
+    <string name="uibc_client_connected">Channel Active (%1$s)</string>
+    <string name="uibc_client_waiting">Listening on TCP %1$d</string>
+
+    <!-- Key Mapping Guide -->
+    <string name="map_dpad">D-Pad Arrows → Navigate App Focus or Move Air-Mouse</string>
+    <string name="map_ok">OK / Center → Select Item or Tap Screen Coordinate</string>
+    <string name="map_back">Back → Phone Back Navigation</string>
+    <string name="map_menu">Menu / Long Back → Open TV Display &amp; DeX HUD</string>
+    <string name="map_vol">Vol + / - → Adjust Mirrored Media Volume</string>
+
+    <!-- Interactive Remote Pad Test -->
+    <string name="remote_pad_title">Test Remote Control Forwarding</string>
+    <string name="remote_btn_up">Up</string>
+    <string name="remote_btn_down">Down</string>
+    <string name="remote_btn_left">Left</string>
+    <string name="remote_btn_right">Right</string>
+    <string name="remote_btn_ok">OK</string>
+    <string name="remote_btn_back">Back</string>
+    <string name="remote_btn_home">Home</string>
+    <string name="remote_btn_recents">Apps</string>
+</resources>

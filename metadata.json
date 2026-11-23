@@ -1,0 +1,6 @@
+{
+  "name": "MiraBox TV",
+  "description": "Android TV Miracast Wi-Fi Display receiver with remote OK security approval, forced landscape mirroring, Samsung DeX-style TV desktop mode, and UIBC remote control forwarding.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

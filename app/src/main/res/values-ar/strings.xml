@@ -1,0 +1,142 @@
+<resources>
+    <string name="app_name">MiraBox TV</string>
+
+    <!-- Navigation -->
+    <string name="nav_receiver">الاستقبال</string>
+    <string name="nav_stage">شاشة البث</string>
+    <string name="nav_settings">العرض و DeX</string>
+    <string name="nav_remote">الريموت</string>
+
+    <!-- Receiver Status & Hero -->
+    <string name="status_listening">سيرفر Miracast جاهز</string>
+    <string name="status_awaiting_ok">مطلوب موافقة الأمان</string>
+    <string name="status_mirroring">البث متصل الآن</string>
+    <string name="status_stopped">السيرفر متوقف</string>
+    <string name="receiver_subtitle">اتصل بهاتفك الأندرويد على نفس شبكة الواي فاي أو عبر Wi-Fi Direct</string>
+    <string name="receiver_name_label">اسم البوكس على الشبكة</string>
+    <string name="wifi_ip_label">عنوان IP على الواي فاي</string>
+    <string name="rtsp_port_label">منفذ Miracast RTSP</string>
+    <string name="uibc_port_label">منفذ تحكم الريموت UIBC</string>
+    <string name="wifi_direct_status_label">خدمة Wi-Fi Direct (P2P)</string>
+    <string name="nsd_status_label">اكتشاف الشبكة (mDNS)</string>
+    <string name="p2p_ready">نشط وجاهز للاكتشاف</string>
+    <string name="p2p_permission_needed">يحتاج إذن الواي فاي</string>
+    <string name="p2p_unavailable">وضع الشبكة المحلية نشط</string>
+    <string name="nsd_registered">يبث _miracast._tcp</string>
+    <string name="nsd_pending">جاري التشغيل…</string>
+
+    <!-- Permissions -->
+    <string name="permission_title">تفعيل اكتشاف Wi-Fi Direct</string>
+    <string name="permission_desc">امنح إذن الأجهزة القريبة ليتمكن هاتفك من العثور على البوكس لاسلكياً عبر Miracast.</string>
+    <string name="permission_grant_btn">منح إذن الواي فاي</string>
+
+    <!-- Connection Instructions & Actions -->
+    <string name="how_to_connect_title">طريقة ربط الهاتف بالبوكس</string>
+    <string name="step_1">1. تأكد أن هاتفك الأندرويد متصل بنفس شبكة الواي فاي الخاصة بالبوكس.</string>
+    <string name="step_2">2. افتح البث / Smart View / Wireless Display من الهاتف واختر \"%1$s\".</string>
+    <string name="step_3">3. اضغط زر OK في ريموت البوكس عند ظهور نافذة التحقق الأمني.</string>
+    <string name="btn_restart_server">إعادة تشغيل السيرفر</string>
+    <string name="btn_loopback_test">اختبار الربط والموافقة</string>
+    <string name="btn_open_stage">فتح شاشة البث</string>
+    <string name="btn_disconnect">قطع الاتصال</string>
+    <string name="scan_qr_label">عنوان الاقتران المحلي</string>
+
+    <!-- Discovered Peers -->
+    <string name="peers_title">الهواتف القريبة عبر Wi-Fi Direct</string>
+    <string name="peers_empty">جاري البحث عن هواتف قريبة تدعم البث اللاسلكي…</string>
+    <string name="btn_scan_peers">تحديث البحث</string>
+    <string name="btn_connect_peer">دعوة</string>
+
+    <!-- Security Approval Dialog -->
+    <string name="security_title">طلب اتصال وبث جديد</string>
+    <string name="security_subtitle">لضمان الأمان، اضغط زر OK في ريموت البوكس للموافقة على عرض شاشة الهاتف.</string>
+    <string name="security_device_label">اسم الهاتف</string>
+    <string name="security_address_label">عنوان الشبكة</string>
+    <string name="security_channel_label">بروتوكول الاتصال</string>
+    <string name="security_pin_label">رمز الجلسة</string>
+    <string name="security_countdown">رفض تلقائي خلال %1$d ث</string>
+    <string name="security_btn_approve">موافقة (OK)</string>
+    <string name="security_btn_trust">وثوق وموافقة دائمة</string>
+    <string name="security_btn_deny">رفض</string>
+
+    <!-- Display & DeX Settings -->
+    <string name="settings_display_section">إعدادات العرض المتقدمة ووضع DeX</string>
+    <string name="mode_standard_title">عكس الشاشة القياسي</string>
+    <string name="mode_standard_desc">عرض شاشة الهاتف بأبعادها واتجاهها الأصلي</string>
+    <string name="mode_landscape_title">تحويل للبث الأفقي 16:9</string>
+    <string name="mode_landscape_desc">تحويل شاشة الهاتف العمودية تلقائياً إلى بث أفقي يملأ شاشة التلفاز</string>
+    <string name="mode_dex_title">وضع أندرويد تي في / Samsung DeX</string>
+    <string name="mode_dex_desc">طلب دقة سطح مكتب 16:9 مع شريط مهام TV وتحكم كامل بالريموت في التطبيقات</string>
+
+    <string name="rotation_label">تدوير البث الإجباري</string>
+    <string name="rot_auto">أفقي تلقائي</string>
+    <string name="rot_0">0°</string>
+    <string name="rot_90">90°</string>
+    <string name="rot_270">270°</string>
+
+    <string name="aspect_label">تناسب الشاشة العريضة</string>
+    <string name="aspect_fit">ملاءمة 16:9</string>
+    <string name="aspect_fill">ملء الشاشة</string>
+    <string name="aspect_stretch">تمديد كامل</string>
+
+    <string name="dex_profile_label">دقة سطح مكتب DeX / TV EDID</string>
+    <string name="dex_1080p">1080p • 60Hz (160 DPI)</string>
+    <string name="dex_4k">4K UHD • 30Hz (240 DPI)</string>
+    <string name="dex_720p">720p • 60Hz (120 DPI)</string>
+    <string name="dex_taskbar_toggle">إظهار شريط مهام Android TV / DeX</string>
+    <string name="dex_taskbar_desc">شريط سفلي لفتح تطبيقات الهاتف والتبديل بين الماوس الهوائي و D-Pad</string>
+
+    <string name="settings_security_section">الأمان وهوية البوكس</string>
+    <string name="security_ok_toggle">إلزام الموافقة بزر OK بالريموت</string>
+    <string name="security_ok_desc">عدم قبول أي هاتف قبل تأكيد صاحب البوكس يدوياً بزر OK</string>
+    <string name="trusted_devices_label">الأجهزة الموثوقة (%1$d)</string>
+    <string name="trusted_none">لا توجد هواتف موثوقة محفوظة حالياً.</string>
+    <string name="btn_revoke_trust">إلغاء الثقة</string>
+    <string name="language_label">لغة الواجهة</string>
+    <string name="lang_arabic">العربية</string>
+    <string name="lang_english">English</string>
+
+    <!-- Mirror Stage & DeX Workspace -->
+    <string name="stage_standby_title">في انتظار بث شاشة الهاتف</string>
+    <string name="stage_standby_desc">قم بالاتصال من هاتفك أو شغّل «اختبار الربط والموافقة» لمعاينة التحويل الأفقي ووضع DeX والتحكم بالريموت.</string>
+    <string name="stage_hud_mode">الوضع: %1$s</string>
+    <string name="stage_hud_input">التحكم: %1$s</string>
+    <string name="stage_hud_rotate">تدوير 90°</string>
+    <string name="stage_hud_toggle_mouse">الماوس الهوائي</string>
+    <string name="stage_hud_controls">لوحة التحكم</string>
+    <string name="dex_workspace_badge">وضع DeX للتلفاز • %1$s</string>
+    <string name="landscape_forced_badge">بث أفقي إجباري 16:9</string>
+    <string name="loopback_banner">جلسة اختبار محلية حية • تحويل أفقي و DeX و UIBC نشط</string>
+
+    <!-- TV Remote & UIBC -->
+    <string name="remote_title">تحكم ريموت البوكس في تطبيقات الهاتف (UIBC)</string>
+    <string name="remote_subtitle">توجيه أزرار ريموت التلفاز للتحكم الكامل بتطبيقات الهاتف المعكوسة.</string>
+    <string name="uibc_mode_label">نمط إرسال أوامر الريموت</string>
+    <string name="uibc_hybrid">هجين (D-Pad + ماوس)</string>
+    <string name="uibc_dpad">أزرار D-Pad مباشرة</string>
+    <string name="uibc_mouse">مؤشر ماوس هوائي</string>
+    <string name="cursor_speed_label">سرعة مؤشر الماوس الهوائي</string>
+    <string name="uibc_telemetry_title">مراقب قناة التحكم الخلفية UIBC</string>
+    <string name="uibc_packets_sent">الأوامر المرسلة: %1$d</string>
+    <string name="uibc_last_event">آخر أمر: %1$s</string>
+    <string name="uibc_client_connected">القناة نشطة (%1$s)</string>
+    <string name="uibc_client_waiting">بانتظار الاتصال على منفذ %1$d</string>
+
+    <!-- Key Mapping Guide -->
+    <string name="map_dpad">الأسهم ← التنقل بين التطبيقات أو تحريك مؤشر الماوس</string>
+    <string name="map_ok">زر OK ← فتح التطبيق أو النقر على موضع المؤشر</string>
+    <string name="map_back">زر الرجوع ← الرجوع داخل الهاتف</string>
+    <string name="map_menu">زر القائمة ← فتح إعدادات العرض السريعة على الشاشة</string>
+    <string name="map_vol">أزرار الصوت ← التحكم بصوت البث</string>
+
+    <!-- Interactive Remote Pad Test -->
+    <string name="remote_pad_title">تجربة أزرار الريموت المرسلة للهاتف</string>
+    <string name="remote_btn_up">أعلى</string>
+    <string name="remote_btn_down">أسفل</string>
+    <string name="remote_btn_left">يسار</string>
+    <string name="remote_btn_right">يمين</string>
+    <string name="remote_btn_ok">OK</string>
+    <string name="remote_btn_back">رجوع</string>
+    <string name="remote_btn_home">الرئيسية</string>
+    <string name="remote_btn_recents">التطبيقات</string>
+</resources>

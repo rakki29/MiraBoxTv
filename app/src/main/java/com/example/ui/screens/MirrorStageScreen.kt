@@ -155,17 +155,42 @@ fun MirrorStageScreen(
             )
         }
 
-        // 2. Interactive Loopback Mirror / DeX Workspace Preview (active during Loopback Test or when Standby)
         if (session == null) {
             StageStandbyOverlay(
                 onRunLoopback = onRunLoopback,
                 onBackToReceiver = onNavigateBack
             )
-        } else if (session.isLoopbackDiagnostic || uiState.receivedVideoFrames < 5L) {
+        } else if (session.isLoopbackDiagnostic) {
             LoopbackInteractivePhoneMirror(
                 uiState = uiState,
                 modifier = Modifier.fillMaxSize()
             )
+        } else if (uiState.receivedVideoFrames == 0L) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(ObsidianCard.copy(alpha = 0.88f))
+                        .border(1.dp, ElectricCyan.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
+                        .padding(horizontal = 24.dp, vertical = 16.dp)
+                ) {
+                    Text(
+                        text = session.deviceName,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "TCP ${session.tcpVideoPort} • UIBC ${session.uibcPort}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = ElectricCyan
+                    )
+                }
+            }
         }
 
         // 3. Android TV / Samsung DeX Desktop Taskbar Overlay
@@ -417,29 +442,34 @@ private fun applyVideoTransformMatrix(
         }
     }
 
-    val effectiveW = if (degrees == 90f || degrees == 270f) streamH.toFloat() else streamW.toFloat()
-    val effectiveH = if (degrees == 90f || degrees == 270f) streamW.toFloat() else streamH.toFloat()
+    val isRotated90 = degrees == 90f || degrees == 270f
+    val effectiveW = if (isRotated90) streamH.toFloat() else streamW.toFloat()
+    val effectiveH = if (isRotated90) streamW.toFloat() else streamH.toFloat()
 
     val sxRatio = viewW / effectiveW
     val syRatio = viewH / effectiveH
 
-    val (scaleX, scaleY) = when {
+    val (targetW, targetH) = when {
         displayMode == DisplayMode.STANDARD_MIRROR -> {
             val fit = minOf(sxRatio, syRatio)
-            (streamW * fit) / viewW to (streamH * fit) / viewH
+            effectiveW * fit to effectiveH * fit
         }
         scaleMode == AspectScaleMode.STRETCH_FULL -> {
-            1f to 1f
+            viewW to viewH
         }
         scaleMode == AspectScaleMode.FILL_WIDESCREEN -> {
             val fill = maxOf(sxRatio, syRatio)
-            (effectiveW * fill) / viewW to (effectiveH * fill) / viewH
+            effectiveW * fill to effectiveH * fill
         }
         else -> {
             val fit = minOf(sxRatio, syRatio)
-            (effectiveW * fit) / viewW to (effectiveH * fit) / viewH
+            effectiveW * fit to effectiveH * fit
         }
     }
+
+    // Because TextureView rotates around center AFTER scaling, a 90/270 rotation swaps X and Y axes
+    val scaleX = if (isRotated90) targetH / viewW else targetW / viewW
+    val scaleY = if (isRotated90) targetW / viewH else targetH / viewH
 
     val matrix = Matrix()
     val cx = viewW / 2f

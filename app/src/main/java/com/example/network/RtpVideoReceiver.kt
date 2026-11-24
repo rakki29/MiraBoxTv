@@ -15,6 +15,7 @@ import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.ByteBuffer
@@ -40,17 +41,29 @@ class RtpVideoReceiver(private val scope: CoroutineScope) {
     private var renderSurface: Surface? = null
     private var targetWidth: Int = 1920
     private var targetHeight: Int = 1080
+    private var configuredWidth: Int = 0
+    private var configuredHeight: Int = 0
+    private var lastCodecConfig: ByteArray? = null
+    private var lastPendingKeyFrame: ByteArray? = null
+    private var lastFrameSize: Pair<Int, Int>? = null
     private val codecLock = Any()
 
     fun attachSurface(surface: Surface?, width: Int = 1920, height: Int = 1080) {
-        renderSurface = surface
-        targetWidth = width
-        targetHeight = height
-        if (surface != null && (udpReceiveJob?.isActive == true || tcpReceiveJob?.isActive == true)) {
-            synchronized(codecLock) {
+        synchronized(codecLock) {
+            renderSurface = surface
+            targetWidth = width
+            targetHeight = height
+            if (surface == null) {
+                releaseDecoderLocked()
+                return
+            }
+            if (udpReceiveJob?.isActive == true || tcpReceiveJob?.isActive == true) {
+                val initW = lastFrameSize?.first ?: width
+                val initH = lastFrameSize?.second ?: height
                 if (decoder == null) {
-                    initDecoderLocked(surface, width, height)
+                    initDecoderLocked(surface, initW, initH)
                 }
+                replayCachedConfigLocked()
             }
         }
     }
@@ -60,76 +73,122 @@ class RtpVideoReceiver(private val scope: CoroutineScope) {
         tcpVideoPort: Int = 19001,
         width: Int = 1920,
         height: Int = 1080
-    ) {
+    ): Int {
         stop()
-        targetWidth = width
-        targetHeight = height
-        renderSurface?.let {
-            synchronized(codecLock) { initDecoderLocked(it, width, height) }
+        synchronized(codecLock) {
+            targetWidth = width
+            targetHeight = height
+            lastCodecConfig = null
+            lastPendingKeyFrame = null
+            lastFrameSize = null
+            renderSurface?.let {
+                initDecoderLocked(it, width, height)
+            }
         }
 
-        // 1. UDP RTP Listener
-        udpReceiveJob = scope.launch(Dispatchers.IO) {
-            val socket = runCatching {
-                DatagramSocket(rtpPort).apply {
-                    reuseAddress = true
-                    soTimeout = 2000
-                }
-            }.getOrNull() ?: return@launch
-            udpSocket = socket
+        // Bind sockets synchronously BEFORE returning so RTSP PLAY 200 OK never races client connect()
+        val uSocket = openUdpSocket(rtpPort)
+        udpSocket = uSocket
+        val tServer = openTcpServerSocket(tcpVideoPort)
+        tcpServerSocket = tServer
+        val actualTcpPort = tServer?.localPort ?: tcpVideoPort
 
-            val buffer = ByteArray(65535)
-            val packet = DatagramPacket(buffer, buffer.size)
-            while (isActive && !socket.isClosed) {
-                try {
-                    socket.receive(packet)
-                    val len = packet.length
-                    if (len > 12) {
-                        val payloadOffset = extractH264PayloadOffset(buffer, len)
-                        if (payloadOffset in 0 until len) {
-                            val nal = buffer.copyOfRange(payloadOffset, len)
-                            feedDecoder(nal, isConfig = false)
+        // 1. UDP RTP Listener
+        if (uSocket != null) {
+            udpReceiveJob = scope.launch(Dispatchers.IO) {
+                val buffer = ByteArray(65535)
+                val packet = DatagramPacket(buffer, buffer.size)
+                while (isActive && !uSocket.isClosed) {
+                    try {
+                        uSocket.receive(packet)
+                        val len = packet.length
+                        if (len > 12) {
+                            val payloadOffset = extractH264PayloadOffset(buffer, len)
+                            if (payloadOffset in 0 until len) {
+                                val nal = buffer.copyOfRange(payloadOffset, len)
+                                feedDecoder(nal, isConfig = false)
+                            }
+                            _receivedFrames.value += 1
                         }
-                        _receivedFrames.value += 1
+                    } catch (_: Exception) {
+                        if (!isActive || uSocket.isClosed) break
                     }
-                } catch (_: Exception) {
-                    // Timeout or closed
                 }
             }
         }
 
         // 2. Framed TCP H.264 Stream Listener (reliable across all Wi-Fi routers)
-        tcpReceiveJob = scope.launch(Dispatchers.IO) {
-            val server = runCatching {
-                ServerSocket(tcpVideoPort).apply { reuseAddress = true }
-            }.getOrNull() ?: return@launch
-            tcpServerSocket = server
-
-            while (isActive && !server.isClosed) {
-                try {
-                    val client = server.accept()
-                    tcpClientSocket?.close()
-                    tcpClientSocket = client
-                    val dis = DataInputStream(BufferedInputStream(client.getInputStream()))
-                    while (isActive && !client.isClosed) {
-                        val frameLen = dis.readInt()
-                        if (frameLen <= 0 || frameLen > 4 * 1024 * 1024) break
-                        val flags = dis.readInt()
-                        val frameW = dis.readInt()
-                        val frameH = dis.readInt()
-                        if (frameW > 0 && frameH > 0) {
-                            _streamResolution.value = frameW to frameH
+        if (tServer != null) {
+            tcpReceiveJob = scope.launch(Dispatchers.IO) {
+                while (isActive && !tServer.isClosed) {
+                    try {
+                        val client = tServer.accept()
+                        runCatching { tcpClientSocket?.close() }
+                        tcpClientSocket = client
+                        client.tcpNoDelay = true
+                        val dis = DataInputStream(BufferedInputStream(client.getInputStream()))
+                        while (isActive && !client.isClosed) {
+                            val frameLen = dis.readInt()
+                            if (frameLen <= 0 || frameLen > 4 * 1024 * 1024) break
+                            val flags = dis.readInt()
+                            val frameW = dis.readInt()
+                            val frameH = dis.readInt()
+                            if (frameW > 0 && frameH > 0) {
+                                _streamResolution.value = frameW to frameH
+                            }
+                            val payload = ByteArray(frameLen)
+                            dis.readFully(payload)
+                            val isConfig = (flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+                            feedDecoder(
+                                data = payload,
+                                isConfig = isConfig,
+                                flags = flags,
+                                frameW = frameW,
+                                frameH = frameH
+                            )
+                            _receivedFrames.value += 1
                         }
-                        val payload = ByteArray(frameLen)
-                        dis.readFully(payload)
-                        val isConfig = (flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
-                        feedDecoder(payload, isConfig = isConfig, flags = flags)
-                        _receivedFrames.value += 1
+                    } catch (_: Exception) {
+                        if (!isActive || tServer.isClosed) break
                     }
-                } catch (_: Exception) {
-                    // Client disconnected or socket closed
                 }
             }
+        }
+
+        return actualTcpPort
+    }
+
+    private fun openUdpSocket(preferredPort: Int): DatagramSocket? {
+        return try {
+            DatagramSocket(null).apply {
+                reuseAddress = true
+                soTimeout = 2000
+                bind(InetSocketAddress(preferredPort))
+            }
+        } catch (_: Exception) {
+            runCatching {
+                DatagramSocket(null).apply {
+                    reuseAddress = true
+                    soTimeout = 2000
+                    bind(InetSocketAddress(0))
+                }
+            }.getOrNull()
+        }
+    }
+
+    private fun openTcpServerSocket(preferredPort: Int): ServerSocket? {
+        return try {
+            ServerSocket().apply {
+                reuseAddress = true
+                bind(InetSocketAddress(preferredPort))
+            }
+        } catch (_: Exception) {
+            runCatching {
+                ServerSocket().apply {
+                    reuseAddress = true
+                    bind(InetSocketAddress(0))
+                }
+            }.getOrNull()
         }
     }
 
@@ -156,49 +215,108 @@ class RtpVideoReceiver(private val scope: CoroutineScope) {
     }
 
     private fun initDecoderLocked(surface: Surface, width: Int, height: Int) {
+        releaseDecoderLocked()
         runCatching {
-            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height)
+            val safeW = width.coerceAtLeast(320)
+            val safeH = height.coerceAtLeast(320)
+            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, safeW, safeH)
             val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
             codec.configure(format, surface, null, 0)
             codec.start()
             decoder = codec
+            configuredWidth = safeW
+            configuredHeight = safeH
         }
     }
 
-    private fun feedDecoder(data: ByteArray, isConfig: Boolean, flags: Int = 0) {
+    private fun releaseDecoderLocked() {
+        runCatching {
+            decoder?.stop()
+            decoder?.release()
+        }
+        decoder = null
+        configuredWidth = 0
+        configuredHeight = 0
+    }
+
+    private fun replayCachedConfigLocked() {
+        val codec = decoder ?: return
+        lastCodecConfig?.let { cfg ->
+            queueToCodecLocked(codec, cfg, MediaCodec.BUFFER_FLAG_CODEC_CONFIG)
+        }
+        lastPendingKeyFrame?.let { key ->
+            queueToCodecLocked(codec, key, MediaCodec.BUFFER_FLAG_KEY_FRAME)
+        }
+    }
+
+    private fun feedDecoder(
+        data: ByteArray,
+        isConfig: Boolean,
+        flags: Int = 0,
+        frameW: Int = 0,
+        frameH: Int = 0
+    ) {
         synchronized(codecLock) {
-            val codec = decoder ?: run {
-                val surf = renderSurface ?: return
-                initDecoderLocked(surf, targetWidth, targetHeight)
-                decoder ?: return
+            if (frameW > 0 && frameH > 0) {
+                lastFrameSize = frameW to frameH
             }
-            runCatching {
-                val inputIndex = codec.dequeueInputBuffer(10_000)
-                if (inputIndex >= 0) {
-                    val inputBuffer: ByteBuffer? = codec.getInputBuffer(inputIndex)
-                    inputBuffer?.clear()
-                    inputBuffer?.put(data)
-                    val bufferFlags = if (isConfig) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else flags
-                    codec.queueInputBuffer(
-                        inputIndex,
-                        0,
-                        data.size,
-                        System.nanoTime() / 1000L,
-                        bufferFlags
-                    )
+            if (isConfig) {
+                lastCodecConfig = data.copyOf()
+            } else if ((flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0) {
+                lastPendingKeyFrame = data.copyOf()
+            }
+
+            val surf = renderSurface ?: return
+            val desiredW = if (frameW > 0) frameW else targetWidth
+            val desiredH = if (frameH > 0) frameH else targetHeight
+
+            if (decoder == null) {
+                initDecoderLocked(surf, desiredW, desiredH)
+                if (!isConfig) {
+                    replayCachedConfigLocked()
                 }
-                val info = MediaCodec.BufferInfo()
-                var outputIndex = codec.dequeueOutputBuffer(info, 0)
-                while (outputIndex >= 0) {
-                    codec.releaseOutputBuffer(outputIndex, true)
-                    val outFormat = codec.outputFormat
+            } else if (isConfig && frameW > 0 && frameH > 0 &&
+                (frameW != configuredWidth || frameH != configuredHeight)
+            ) {
+                initDecoderLocked(surf, frameW, frameH)
+            }
+
+            val codec = decoder ?: return
+            val bufferFlags = if (isConfig) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else flags
+            queueToCodecLocked(codec, data, bufferFlags)
+        }
+    }
+
+    private fun queueToCodecLocked(codec: MediaCodec, data: ByteArray, bufferFlags: Int) {
+        runCatching {
+            val inputIndex = codec.dequeueInputBuffer(15_000)
+            if (inputIndex >= 0) {
+                val inputBuffer: ByteBuffer? = codec.getInputBuffer(inputIndex)
+                inputBuffer?.clear()
+                inputBuffer?.put(data)
+                codec.queueInputBuffer(
+                    inputIndex,
+                    0,
+                    data.size,
+                    System.nanoTime() / 1000L,
+                    bufferFlags
+                )
+            }
+            val info = MediaCodec.BufferInfo()
+            var outputIndex = codec.dequeueOutputBuffer(info, 0)
+            while (outputIndex >= 0) {
+                codec.releaseOutputBuffer(outputIndex, true)
+                val outFormat = codec.outputFormat
+                if (outFormat.containsKey(MediaFormat.KEY_WIDTH) &&
+                    outFormat.containsKey(MediaFormat.KEY_HEIGHT)
+                ) {
                     val w = outFormat.getInteger(MediaFormat.KEY_WIDTH)
                     val h = outFormat.getInteger(MediaFormat.KEY_HEIGHT)
                     if (w > 0 && h > 0) {
                         _streamResolution.value = w to h
                     }
-                    outputIndex = codec.dequeueOutputBuffer(info, 0)
                 }
+                outputIndex = codec.dequeueOutputBuffer(info, 0)
             }
         }
     }
@@ -213,11 +331,10 @@ class RtpVideoReceiver(private val scope: CoroutineScope) {
         tcpClientSocket = null
         tcpServerSocket = null
         synchronized(codecLock) {
-            runCatching {
-                decoder?.stop()
-                decoder?.release()
-            }
-            decoder = null
+            releaseDecoderLocked()
+            lastCodecConfig = null
+            lastPendingKeyFrame = null
+            lastFrameSize = null
         }
         _receivedFrames.value = 0L
         _streamResolution.value = null

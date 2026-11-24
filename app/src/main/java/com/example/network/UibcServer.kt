@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.OutputStream
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.ByteBuffer
@@ -113,12 +114,23 @@ class UibcServer(private val scope: CoroutineScope) {
 
     private fun openServerSocket(preferredPort: Int): ServerSocket? {
         return try {
-            ServerSocket(preferredPort).apply { reuseAddress = true }
+            ServerSocket().apply {
+                reuseAddress = true
+                bind(InetSocketAddress(preferredPort))
+            }
         } catch (_: Exception) {
             try {
-                ServerSocket(preferredPort + 10000).apply { reuseAddress = true }
+                ServerSocket().apply {
+                    reuseAddress = true
+                    bind(InetSocketAddress(preferredPort + 10000))
+                }
             } catch (_: Exception) {
-                runCatching { ServerSocket(0) }.getOrNull()
+                runCatching {
+                    ServerSocket().apply {
+                        reuseAddress = true
+                        bind(InetSocketAddress(0))
+                    }
+                }.getOrNull()
             }
         }
     }

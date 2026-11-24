@@ -55,6 +55,9 @@ class NsdReceiverBrowser(context: Context) {
         }
     }
 
+    private val resolveQueue = ArrayDeque<NsdServiceInfo>()
+    private var resolvingLegacy = false
+
     private fun resolveService(nsd: NsdManager, serviceInfo: NsdServiceInfo) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             runCatching {
@@ -76,18 +79,44 @@ class NsdReceiverBrowser(context: Context) {
                 )
             }
         } else {
-            @Suppress("DEPRECATION")
+            synchronized(resolveQueue) {
+                resolveQueue.addLast(serviceInfo)
+                if (!resolvingLegacy) {
+                    drainLegacyResolveQueue(nsd)
+                }
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun drainLegacyResolveQueue(nsd: NsdManager) {
+        val next = synchronized(resolveQueue) {
+            if (resolveQueue.isEmpty()) {
+                resolvingLegacy = false
+                return
+            }
+            resolvingLegacy = true
+            resolveQueue.removeFirst()
+        }
+        runCatching {
             nsd.resolveService(
-                serviceInfo,
+                next,
                 object : NsdManager.ResolveListener {
-                    override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) = Unit
+                    override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {
+                        drainLegacyResolveQueue(nsd)
+                    }
 
                     override fun onServiceResolved(info: NsdServiceInfo) {
-                        val host = info.host?.hostAddress ?: return
-                        addOrUpdate(info, host)
+                        val host = info.host?.hostAddress
+                        if (host != null) {
+                            addOrUpdate(info, host)
+                        }
+                        drainLegacyResolveQueue(nsd)
                     }
                 }
             )
+        }.onFailure {
+            drainLegacyResolveQueue(nsd)
         }
     }
 

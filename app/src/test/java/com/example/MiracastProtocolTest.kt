@@ -99,6 +99,33 @@ class MiracastProtocolTest {
         assertEquals(ServerState.MIRRORING, server.serverState.value)
         assertNotNull(server.activeSession.value)
 
+        val videoPort = Regex("X-Video-Port:\\s*(\\d+)").find(playResp)
+            ?.groupValues?.getOrNull(1)?.toIntOrNull()
+        val uibcPort = Regex("X-Uibc-Port:\\s*(\\d+)").find(playResp)
+            ?.groupValues?.getOrNull(1)?.toIntOrNull()
+        assertNotNull(videoPort)
+        assertNotNull(uibcPort)
+
+        // Immediately connect to X-Video-Port without any delay (must not throw ECONNREFUSED)
+        val videoClient = Socket("127.0.0.1", videoPort!!)
+        val dos = java.io.DataOutputStream(videoClient.getOutputStream())
+        val dummyNal = byteArrayOf(0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E)
+        dos.writeInt(dummyNal.size)
+        dos.writeInt(2) // BUFFER_FLAG_CODEC_CONFIG
+        dos.writeInt(720)
+        dos.writeInt(1280)
+        dos.write(dummyNal)
+        dos.flush()
+
+        var waitMs = 0
+        while (rtp.receivedFrames.value < 1L && waitMs < 1500) {
+            delay(25)
+            waitMs += 25
+        }
+        assertTrue(rtp.receivedFrames.value >= 1L)
+        assertEquals(720 to 1280, rtp.streamResolution.value)
+
+        videoClient.close()
         approver.join()
         socket.close()
         server.stop()

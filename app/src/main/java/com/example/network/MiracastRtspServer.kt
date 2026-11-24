@@ -24,6 +24,7 @@ import java.io.PrintWriter
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.UUID
@@ -60,6 +61,7 @@ class MiracastRtspServer(
 
     private var serverSocket: ServerSocket? = null
     private var acceptJob: Job? = null
+    private var clientJob: Job? = null
     private var activeClientSocket: Socket? = null
     private var pendingDeferred: CompletableDeferred<ApprovalDecision>? = null
     private var loopbackClientJob: Job? = null
@@ -78,7 +80,11 @@ class MiracastRtspServer(
             while (isActive && socket != null && !socket.isClosed) {
                 try {
                     val client = socket.accept()
-                    handleRtspClient(client, uibcPort)
+                    runCatching { activeClientSocket?.close() }
+                    clientJob?.cancel()
+                    clientJob = scope.launch(Dispatchers.IO) {
+                        handleRtspClient(client, uibcPort)
+                    }
                 } catch (_: Exception) {
                     if (isActive && socket.isClosed) break
                 }
@@ -89,12 +95,23 @@ class MiracastRtspServer(
 
     private fun openServerSocket(preferredPort: Int): ServerSocket? {
         return try {
-            ServerSocket(preferredPort).apply { reuseAddress = true }
+            ServerSocket().apply {
+                reuseAddress = true
+                bind(InetSocketAddress(preferredPort))
+            }
         } catch (_: Exception) {
             try {
-                ServerSocket(preferredPort + 10000).apply { reuseAddress = true }
+                ServerSocket().apply {
+                    reuseAddress = true
+                    bind(InetSocketAddress(preferredPort + 10000))
+                }
             } catch (_: Exception) {
-                runCatching { ServerSocket(0) }.getOrNull()
+                runCatching {
+                    ServerSocket().apply {
+                        reuseAddress = true
+                        bind(InetSocketAddress(0))
+                    }
+                }.getOrNull()
             }
         }
     }
@@ -257,8 +274,7 @@ class MiracastRtspServer(
                         } else {
                             ConnectionChannel.WIFI_LAN_RTSP
                         }
-                        val tcpVideoPort = 19001
-                        rtpVideoReceiver.start(negotiatedRtpPort, tcpVideoPort)
+                        val tcpVideoPort = rtpVideoReceiver.start(negotiatedRtpPort, 19001)
                         _activeSession.value = ActiveMirrorSession(
                             sessionId = sessionId,
                             deviceName = deviceName,
@@ -277,7 +293,11 @@ class MiracastRtspServer(
                             writer,
                             "200 OK",
                             cseq,
-                            mapOf("Session" to sessionId)
+                            mapOf(
+                                "Session" to sessionId,
+                                "X-Video-Port" to tcpVideoPort.toString(),
+                                "X-Uibc-Port" to uibcPort.toString()
+                            )
                         )
                     }
 
@@ -295,10 +315,10 @@ class MiracastRtspServer(
             // Client disconnected
         } finally {
             runCatching { client.close() }
-            if (activeClientSocket == client) {
+            if (activeClientSocket === client) {
                 activeClientSocket = null
+                clearSessionToListening()
             }
-            clearSessionToListening()
         }
     }
 
@@ -500,6 +520,7 @@ class MiracastRtspServer(
 
     fun stop() {
         loopbackClientJob?.cancel()
+        clientJob?.cancel()
         acceptJob?.cancel()
         pendingDeferred?.cancel()
         pendingDeferred = null

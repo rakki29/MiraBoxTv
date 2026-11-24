@@ -10,13 +10,16 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.media.AudioManager
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import com.example.R
 import com.example.miracast.SenderState
@@ -25,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -179,10 +183,16 @@ class ScreenCastSenderService : Service() {
                 val input = BufferedReader(InputStreamReader(rtsp.getInputStream()))
                 val phoneName = "${Build.MANUFACTURER} ${Build.MODEL}".trim()
                 val phoneRes = resources.displayMetrics
-                val srcW = phoneRes.widthPixels
-                val srcH = phoneRes.heightPixels
+                val srcW = phoneRes.widthPixels.coerceAtLeast(320)
+                val srcH = phoneRes.heightPixels.coerceAtLeast(320)
 
-                fun sendRtsp(method: String, cseq: Int, body: String = ""): Int {
+                data class RtspResp(
+                    val code: Int,
+                    val headers: Map<String, String>,
+                    val body: String
+                )
+
+                fun sendRtsp(method: String, cseq: Int, body: String = ""): RtspResp {
                     val req = buildString {
                         append("$method rtsp://$host:$rtspPort/wfd1.0 RTSP/1.0\r\n")
                         append("CSeq: $cseq\r\n")
@@ -197,16 +207,23 @@ class ScreenCastSenderService : Service() {
                     }
                     out.print(req)
                     out.flush()
-                    val statusLine = input.readLine() ?: return 500
+                    val statusLine = input.readLine() ?: return RtspResp(500, emptyMap(), "")
+                    val respHeaders = mutableMapOf<String, String>()
                     var len = 0
                     while (true) {
                         val line = input.readLine() ?: break
                         if (line.isEmpty()) break
-                        if (line.startsWith("Content-Length:", ignoreCase = true)) {
-                            len = line.substringAfter(":").trim().toIntOrNull() ?: 0
+                        val colon = line.indexOf(':')
+                        if (colon > 0) {
+                            val k = line.substring(0, colon).trim().lowercase()
+                            val v = line.substring(colon + 1).trim()
+                            respHeaders[k] = v
+                            if (k == "content-length") {
+                                len = v.toIntOrNull() ?: 0
+                            }
                         }
                     }
-                    if (len > 0) {
+                    val respBody = if (len > 0) {
                         val buf = CharArray(len)
                         var read = 0
                         while (read < len) {
@@ -214,29 +231,40 @@ class ScreenCastSenderService : Service() {
                             if (n <= 0) break
                             read += n
                         }
-                    }
-                    return statusLine.split(" ").getOrNull(1)?.toIntOrNull() ?: 500
+                        String(buf, 0, read)
+                    } else ""
+                    val code = statusLine.split(" ").getOrNull(1)?.toIntOrNull() ?: 500
+                    return RtspResp(code, respHeaders, respBody)
                 }
 
-                if (sendRtsp("OPTIONS", 1) != 200) error("RTSP OPTIONS failed")
-                if (sendRtsp("GET_PARAMETER", 2) != 200) error("RTSP GET_PARAMETER failed")
+                if (sendRtsp("OPTIONS", 1).code != 200) error("RTSP OPTIONS failed")
+                val getParamResp = sendRtsp("GET_PARAMETER", 2)
+                if (getParamResp.code != 200) error("RTSP GET_PARAMETER failed")
+                val uibcFromCaps = Regex("port=(\\d{2,5})").find(getParamResp.body)
+                    ?.groupValues?.getOrNull(1)?.toIntOrNull()
+
                 sendRtsp(
                     "SET_PARAMETER",
                     3,
                     "wfd_client_rtp_ports: RTP/AVP/UDP;unicast 19000 0 mode=play\r\n" +
                         "wfd_source_resolution: ${srcW}x${srcH}\r\n"
                 )
-                val setupCode = sendRtsp("SETUP", 4)
-                if (setupCode == 403) error("Denied by TV Box owner")
-                if (setupCode != 200) error("RTSP SETUP failed ($setupCode)")
-                if (sendRtsp("PLAY", 5) != 200) error("RTSP PLAY failed")
+                val setupResp = sendRtsp("SETUP", 4)
+                if (setupResp.code == 403) error("Denied by TV Box owner")
+                if (setupResp.code != 200) error("RTSP SETUP failed (${setupResp.code})")
+                val playResp = sendRtsp("PLAY", 5)
+                if (playResp.code != 200) error("RTSP PLAY failed (${playResp.code})")
+
+                val actualVideoPort = playResp.headers["x-video-port"]?.toIntOrNull() ?: videoPort
+                val actualUibcPort = playResp.headers["x-uibc-port"]?.toIntOrNull()
+                    ?: uibcFromCaps
+                    ?: uibcPort
 
                 // 2. Start UIBC Listener Client to receive TV Remote commands
-                startUibcReceiver(host, uibcPort, srcW, srcH)
+                startUibcReceiver(host, actualUibcPort)
 
                 // 3. Connect TCP Video Socket & Initialize MediaProjection + H.264 Encoder
-                val vSocket = Socket()
-                vSocket.connect(InetSocketAddress(host, videoPort), 8000)
+                val vSocket = connectWithRetry(host, actualVideoPort, connectTimeoutMs = 5000)
                 vSocket.tcpNoDelay = true
                 videoSocket = vSocket
                 val videoOut = DataOutputStream(BufferedOutputStream(vSocket.getOutputStream()))
@@ -249,30 +277,24 @@ class ScreenCastSenderService : Service() {
                     override fun onStop() {
                         stopCastAndSelf()
                     }
-                }, null)
+                }, Handler(Looper.getMainLooper()))
 
-                val encW = 1280
-                val encH = 720
-                val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, encW, encH).apply {
-                    setInteger(
-                        MediaFormat.KEY_COLOR_FORMAT,
-                        MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
-                    )
-                    setInteger(MediaFormat.KEY_BIT_RATE, 3_500_000)
-                    setInteger(MediaFormat.KEY_FRAME_RATE, 30)
-                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
-                }
+                val isPortrait = srcH > srcW
+                val maxDim = 1280
+                val rawW = if (isPortrait) ((maxDim * srcW.toFloat()) / srcH).toInt() else maxDim
+                val rawH = if (isPortrait) maxDim else ((maxDim * srcH.toFloat()) / srcW).toInt()
+                val encW = (((rawW + 8) / 16) * 16).coerceIn(368, 1280)
+                val encH = (((rawH + 8) / 16) * 16).coerceIn(368, 1280)
 
-                val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-                codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                val (codec, activeEncW, activeEncH) = createConfiguredEncoder(encW, encH, isPortrait)
                 val inputSurface = codec.createInputSurface()
                 codec.start()
                 encoder = codec
 
                 virtualDisplay = projection.createVirtualDisplay(
                     "MiraBoxCast",
-                    encW,
-                    encH,
+                    activeEncW,
+                    activeEncH,
                     resources.displayMetrics.densityDpi,
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                     inputSurface,
@@ -299,14 +321,10 @@ class ScreenCastSenderService : Service() {
                             buf.get(frameBytes)
                             videoOut.writeInt(frameBytes.size)
                             videoOut.writeInt(bufferInfo.flags)
-                            videoOut.writeInt(encW)
-                            videoOut.writeInt(encH)
+                            videoOut.writeInt(activeEncW)
+                            videoOut.writeInt(activeEncH)
                             videoOut.write(frameBytes)
-                            if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0) {
-                                videoOut.flush()
-                            } else {
-                                videoOut.flush()
-                            }
+                            videoOut.flush()
                             SenderRuntimeBus.update { st ->
                                 st.copy(framesStreamed = st.framesStreamed + 1)
                             }
@@ -327,12 +345,68 @@ class ScreenCastSenderService : Service() {
         }
     }
 
-    private fun startUibcReceiver(host: String, uibcPort: Int, dispW: Int, dispH: Int) {
+    private suspend fun connectWithRetry(
+        host: String,
+        port: Int,
+        connectTimeoutMs: Int = 5000,
+        maxAttempts: Int = 6,
+        retryDelayMs: Long = 250
+    ): Socket {
+        var lastError: Exception? = null
+        repeat(maxAttempts) { attempt ->
+            val sock = Socket()
+            try {
+                sock.connect(InetSocketAddress(host, port), connectTimeoutMs)
+                return sock
+            } catch (e: Exception) {
+                runCatching { sock.close() }
+                lastError = e
+                if (attempt < maxAttempts - 1) {
+                    delay(retryDelayMs)
+                }
+            }
+        }
+        throw lastError ?: IllegalStateException("Unable to connect to $host:$port")
+    }
+
+    private fun createConfiguredEncoder(
+        preferredW: Int,
+        preferredH: Int,
+        isPortrait: Boolean
+    ): Triple<MediaCodec, Int, Int> {
+        val candidates = listOf(
+            preferredW to preferredH,
+            if (isPortrait) 720 to 1280 else 1280 to 720
+        )
+        var lastException: Exception? = null
+        for ((w, h) in candidates) {
+            val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            try {
+                val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
+                    setInteger(
+                        MediaFormat.KEY_COLOR_FORMAT,
+                        MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+                    )
+                    setInteger(MediaFormat.KEY_BIT_RATE, 3_500_000)
+                    setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                }
+                codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                return Triple(codec, w, h)
+            } catch (e: Exception) {
+                runCatching { codec.release() }
+                lastException = e
+            }
+        }
+        throw lastException ?: IllegalStateException("No compatible H.264 encoder")
+    }
+
+    private fun startUibcReceiver(host: String, uibcPort: Int) {
         uibcJob = serviceScope.launch {
             runCatching {
-                val sock = Socket()
-                sock.connect(InetSocketAddress(host, uibcPort), 6000)
+                val sock = connectWithRetry(host, uibcPort, connectTimeoutMs = 5000)
                 uibcSocket = sock
+                val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
                 val dis = DataInputStream(BufferedInputStream(sock.getInputStream()))
                 while (isActive && !sock.isClosed) {
                     dis.readByte() // version/flags
@@ -350,7 +424,19 @@ class ScreenCastSenderService : Service() {
                                 if (body.size >= 6) {
                                     val hid = ((body[4].toInt() and 0xFF) shl 8) or
                                         (body[5].toInt() and 0xFF)
-                                    acc?.executeRemoteKey(hid)
+                                    when (hid) {
+                                        0x0080 -> audioManager?.adjustStreamVolume(
+                                            AudioManager.STREAM_MUSIC,
+                                            AudioManager.ADJUST_RAISE,
+                                            AudioManager.FLAG_SHOW_UI
+                                        )
+                                        0x0081 -> audioManager?.adjustStreamVolume(
+                                            AudioManager.STREAM_MUSIC,
+                                            AudioManager.ADJUST_LOWER,
+                                            AudioManager.FLAG_SHOW_UI
+                                        )
+                                        else -> acc?.executeRemoteKey(hid)
+                                    }
                                     SenderRuntimeBus.update {
                                         it.copy(
                                             uibcEventsExecuted = it.uibcEventsExecuted + 1,

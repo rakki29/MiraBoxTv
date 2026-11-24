@@ -326,12 +326,11 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
 
         val mouse = _airMouse.value
         val step = 0.04f * _latestSettings.value.airMouseSpeed
-        val dexProfile = _latestSettings.value.dexDpiProfile
 
         if (mouse.enabled && isDirectionalOrOk(keyCode)) {
             if (!isDown) {
                 if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
-                    uibcServer.sendTouchEvent(1, mouse.normX, mouse.normY, dexProfile.width, dexProfile.height)
+                    uibcServer.sendTouchEvent(1, mouse.normX, mouse.normY, 1920, 1080)
                 }
                 return true
             }
@@ -339,25 +338,25 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
                 KeyEvent.KEYCODE_DPAD_UP -> {
                     val ny = (mouse.normY - step).coerceIn(0.03f, 0.97f)
                     _airMouse.update { it.copy(normY = ny) }
-                    uibcServer.sendTouchEvent(2, mouse.normX, ny, dexProfile.width, dexProfile.height)
+                    uibcServer.sendTouchEvent(2, mouse.normX, ny, 1920, 1080)
                 }
                 KeyEvent.KEYCODE_DPAD_DOWN -> {
                     val ny = (mouse.normY + step).coerceIn(0.03f, 0.97f)
                     _airMouse.update { it.copy(normY = ny) }
-                    uibcServer.sendTouchEvent(2, mouse.normX, ny, dexProfile.width, dexProfile.height)
+                    uibcServer.sendTouchEvent(2, mouse.normX, ny, 1920, 1080)
                 }
                 KeyEvent.KEYCODE_DPAD_LEFT -> {
                     val nx = (mouse.normX - step).coerceIn(0.03f, 0.97f)
                     _airMouse.update { it.copy(normX = nx) }
-                    uibcServer.sendTouchEvent(2, nx, mouse.normY, dexProfile.width, dexProfile.height)
+                    uibcServer.sendTouchEvent(2, nx, mouse.normY, 1920, 1080)
                 }
                 KeyEvent.KEYCODE_DPAD_RIGHT -> {
                     val nx = (mouse.normX + step).coerceIn(0.03f, 0.97f)
                     _airMouse.update { it.copy(normX = nx) }
-                    uibcServer.sendTouchEvent(2, nx, mouse.normY, dexProfile.width, dexProfile.height)
+                    uibcServer.sendTouchEvent(2, nx, mouse.normY, 1920, 1080)
                 }
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                    uibcServer.sendTouchEvent(0, mouse.normX, mouse.normY, dexProfile.width, dexProfile.height)
+                    uibcServer.sendTouchEvent(0, mouse.normX, mouse.normY, 1920, 1080)
                     handleLoopbackCursorClick(mouse.normX, mouse.normY)
                 }
             }

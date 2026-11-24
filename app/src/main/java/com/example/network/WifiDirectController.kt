@@ -7,10 +7,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.net.wifi.WifiManager
 import android.net.wifi.WpsInfo
 import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pDevice
@@ -31,7 +30,7 @@ import java.net.NetworkInterface
 
 /**
  * Coordinates Android Wi-Fi Direct (WifiP2pManager), WFD Sink advertisement,
- * NSD (_miracast._tcp) local Wi-Fi service discovery, and local IPv4 detection.
+ * NSD (_miracast._tcp) local Wi-Fi service discovery, and accurate local LAN IPv4 detection.
  */
 class WifiDirectController(
     private val context: Context,
@@ -44,6 +43,8 @@ class WifiDirectController(
     private val _endpoints = MutableStateFlow(NetworkEndpoints())
     val endpoints: StateFlow<NetworkEndpoints> = _endpoints.asStateFlow()
 
+    private val wifiManager: WifiManager? =
+        context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
     private val manager: WifiP2pManager? =
         context.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
     private var channel: WifiP2pManager.Channel? = null
@@ -68,6 +69,26 @@ class WifiDirectController(
                     val state = intent.getIntExtra(WifiP2pManager.EXTRA_WIFI_STATE, -1)
                     val enabled = state == WifiP2pManager.WIFI_P2P_STATE_ENABLED
                     _p2pStatus.update { it.copy(isP2pEnabled = enabled) }
+                }
+
+                WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION -> {
+                    @Suppress("DEPRECATION")
+                    val selfDevice: WifiP2pDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(
+                            WifiP2pManager.EXTRA_WIFI_P2P_DEVICE,
+                            WifiP2pDevice::class.java
+                        )
+                    } else {
+                        intent.getParcelableExtra(WifiP2pManager.EXTRA_WIFI_P2P_DEVICE)
+                    }
+                    if (selfDevice != null) {
+                        _p2pStatus.update {
+                            it.copy(
+                                p2pDeviceName = selfDevice.deviceName.orEmpty(),
+                                wfdHardwareSupported = it.wfdHardwareSupported || isWfdCapable(selfDevice)
+                            )
+                        }
+                    }
                 }
 
                 WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION -> {
@@ -139,19 +160,33 @@ class WifiDirectController(
     }
 
     @SuppressLint("MissingPermission")
-    fun startDiscoveryAndAdvertising(receiverName: String, rtspPort: Int, uibcPort: Int) {
+    fun startDiscoveryAndAdvertising(
+        receiverName: String,
+        rtspPort: Int,
+        uibcPort: Int,
+        tcpVideoPort: Int = 19001
+    ) {
         val permGranted = hasWifiDirectPermission()
-        val ip = resolveLocalWifiIp()
+        val (ip, isCgnatOrVpn) = resolveLocalWifiIp()
+        val wifiRadioOn = runCatching { wifiManager?.isWifiEnabled ?: true }.getOrDefault(true)
+
         _endpoints.update {
             it.copy(
                 wifiIpAddress = ip,
+                isCgnatOrVpnIp = isCgnatOrVpn,
                 rtspPort = rtspPort,
-                uibcPort = uibcPort
+                uibcPort = uibcPort,
+                tcpVideoPort = tcpVideoPort
             )
         }
-        _p2pStatus.update { it.copy(hasPermission = permGranted) }
+        _p2pStatus.update {
+            it.copy(
+                hasPermission = permGranted,
+                wifiEnabled = wifiRadioOn
+            )
+        }
 
-        registerNsdService(receiverName, rtspPort, uibcPort)
+        registerNsdService(receiverName, rtspPort, uibcPort, tcpVideoPort)
 
         if (!receiverRegistered) {
             runCatching {
@@ -181,8 +216,12 @@ class WifiDirectController(
         }
 
         val ch = channel ?: return
-        val wfdSupported = tryEnableWfdSinkMode(p2pManager, ch, rtspPort)
-        _p2pStatus.update { it.copy(wfdHardwareSupported = wfdSupported) }
+
+        // Set the P2P broadcast name so nearby devices see MiraBox-TV instead of Android_xxxx
+        trySetP2pDeviceName(p2pManager, ch, receiverName)
+
+        // Attempt WFD Sink IE (will report clearly if OS denies CONFIGURE_WIFI_DISPLAY)
+        tryEnableWfdSinkMode(p2pManager, ch, rtspPort)
 
         // Register Wi-Fi Direct DNS-SD service for Miracast Sink discovery
         runCatching {
@@ -204,7 +243,28 @@ class WifiDirectController(
             })
         }
 
-        // Create P2P group so TV Box acts as Miracast Group Owner, and start peer discovery
+        // Start passive P2P listening (API 33+) or createGroup without disrupting it with discoverPeers()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            runCatching {
+                p2pManager.startListening(ch, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() {
+                        _p2pStatus.update { it.copy(statusNote = "P2P Passive Listen Active") }
+                    }
+
+                    override fun onFailure(reason: Int) {
+                        createP2pGroupFallback(p2pManager, ch)
+                    }
+                })
+            }.onFailure {
+                createP2pGroupFallback(p2pManager, ch)
+            }
+        } else {
+            createP2pGroupFallback(p2pManager, ch)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun createP2pGroupFallback(p2pManager: WifiP2pManager, ch: WifiP2pManager.Channel) {
         p2pManager.createGroup(ch, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
                 _p2pStatus.update {
@@ -213,11 +273,11 @@ class WifiDirectController(
             }
 
             override fun onFailure(reason: Int) {
-                // Group may already exist or hardware busy; proceed with peer discovery
-                discoverPeers()
+                _p2pStatus.update {
+                    it.copy(statusNote = "P2P standby (code $reason) • LAN Active")
+                }
             }
         })
-        discoverPeers()
     }
 
     @SuppressLint("MissingPermission")
@@ -254,7 +314,12 @@ class WifiDirectController(
         })
     }
 
-    private fun registerNsdService(serviceName: String, rtspPort: Int, uibcPort: Int) {
+    private fun registerNsdService(
+        serviceName: String,
+        rtspPort: Int,
+        uibcPort: Int,
+        tcpVideoPort: Int
+    ) {
         val nsd = nsdManager ?: return
         unregisterNsdService()
         val info = NsdServiceInfo().apply {
@@ -262,6 +327,7 @@ class WifiDirectController(
             serviceType = "_miracast._tcp."
             port = rtspPort
             setAttribute("uibc_port", uibcPort.toString())
+            setAttribute("tcp_video_port", tcpVideoPort.toString())
             setAttribute("role", "sink")
             setAttribute("dex", "supported")
         }
@@ -294,15 +360,42 @@ class WifiDirectController(
         nsdListener = null
     }
 
+    private fun trySetP2pDeviceName(
+        p2pManager: WifiP2pManager,
+        p2pChannel: WifiP2pManager.Channel,
+        name: String
+    ) {
+        runCatching {
+            val method = WifiP2pManager::class.java.getMethod(
+                "setDeviceName",
+                WifiP2pManager.Channel::class.java,
+                String::class.java,
+                WifiP2pManager.ActionListener::class.java
+            )
+            method.invoke(
+                p2pManager,
+                p2pChannel,
+                name.take(24),
+                object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() {
+                        _p2pStatus.update { it.copy(p2pDeviceName = name) }
+                    }
+
+                    override fun onFailure(reason: Int) = Unit
+                }
+            )
+        }
+    }
+
     /**
-     * Attempts to configure hidden Android WifiP2pWfdInfo (PRIMARY_SINK) if the platform permits it.
+     * Attempts to configure hidden Android WifiP2pWfdInfo (PRIMARY_SINK) and records exact OS result.
      */
     private fun tryEnableWfdSinkMode(
         p2pManager: WifiP2pManager,
         p2pChannel: WifiP2pManager.Channel,
         rtspPort: Int
-    ): Boolean {
-        return runCatching {
+    ) {
+        try {
             val wfdClass = Class.forName("android.net.wifi.p2p.WifiP2pWfdInfo")
             val wfdInfo = wfdClass.getDeclaredConstructor().newInstance()
             wfdClass.getMethod("setWfdEnabled", Boolean::class.javaPrimitiveType)
@@ -321,9 +414,48 @@ class WifiDirectController(
                 wfdClass,
                 WifiP2pManager.ActionListener::class.java
             )
-            setWfdMethod.invoke(p2pManager, p2pChannel, wfdInfo, null)
-            true
-        }.getOrDefault(false)
+            setWfdMethod.invoke(
+                p2pManager,
+                p2pChannel,
+                wfdInfo,
+                object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() {
+                        _p2pStatus.update {
+                            it.copy(
+                                wfdHardwareSupported = true,
+                                wfdBlockedByOs = false,
+                                wfdDiagnosticNote = "Native WFD Sink IE Active"
+                            )
+                        }
+                    }
+
+                    override fun onFailure(reason: Int) {
+                        _p2pStatus.update {
+                            it.copy(
+                                wfdHardwareSupported = false,
+                                wfdBlockedByOs = true,
+                                wfdDiagnosticNote = "WFD rejected by ROM (code $reason)"
+                            )
+                        }
+                    }
+                }
+            )
+        } catch (t: Throwable) {
+            val root = t.cause ?: t
+            val isSecurity = root is SecurityException ||
+                root.message?.contains("CONFIGURE_WIFI_DISPLAY", ignoreCase = true) == true
+            _p2pStatus.update {
+                it.copy(
+                    wfdHardwareSupported = false,
+                    wfdBlockedByOs = true,
+                    wfdDiagnosticNote = if (isSecurity) {
+                        "CONFIGURE_WIFI_DISPLAY blocked by Android ROM"
+                    } else {
+                        "WFD unavailable (${root.javaClass.simpleName})"
+                    }
+                )
+            }
+        }
     }
 
     private fun isWfdCapable(device: WifiP2pDevice): Boolean {
@@ -341,26 +473,66 @@ class WifiDirectController(
         else -> "Unknown"
     }
 
-    fun resolveLocalWifiIp(): String {
-        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        val activeNetwork = cm?.activeNetwork
-        val caps = cm?.getNetworkCapabilities(activeNetwork)
-        val hasLocalNet = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true ||
-            caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true
-        if (hasLocalNet) {
-            val linkProps = cm?.getLinkProperties(activeNetwork)
-            val linkAddr = linkProps?.linkAddresses
-                ?.map { it.address }
-                ?.firstOrNull { it is Inet4Address && !it.isLoopbackAddress }
-            if (linkAddr != null) return linkAddr.hostAddress ?: "127.0.0.1"
-        }
-        return runCatching {
+    /**
+     * Resolves the best local LAN IPv4 address (192.168.x.x / 10.x.x.x / 172.16-31.x.x)
+     * avoiding VPN (tun*) and cellular/CGNAT (100.64.0.0/10) unless no LAN IP exists.
+     */
+    fun resolveLocalWifiIp(): Pair<String, Boolean> {
+        val candidates = runCatching {
             NetworkInterface.getNetworkInterfaces().toList()
                 .filter { it.isUp && !it.isLoopback }
-                .flatMap { it.inetAddresses.toList() }
-                .firstOrNull { it is Inet4Address && !it.isLoopbackAddress }
-                ?.hostAddress ?: "127.0.0.1"
-        }.getOrDefault("127.0.0.1")
+                .flatMap { iface ->
+                    val name = iface.name.lowercase()
+                    iface.inetAddresses.toList()
+                        .filterIsInstance<Inet4Address>()
+                        .filter { !it.isLoopbackAddress }
+                        .map { addr -> name to (addr.hostAddress ?: "") }
+                }
+                .filter { (_, ip) -> ip.isNotBlank() }
+        }.getOrDefault(emptyList())
+
+        val nonTunnel = candidates.filterNot { (ifName, _) ->
+            ifName.startsWith("tun") || ifName.startsWith("ppp") ||
+                ifName.startsWith("rmnet") || ifName.startsWith("ccmni") ||
+                ifName.startsWith("wg")
+        }
+
+        // 1. Prefer wlan* or eth* with standard RFC1918 private LAN IP
+        val preferredLan = nonTunnel
+            .sortedBy { (ifName, _) ->
+                when {
+                    ifName.startsWith("wlan") -> 0
+                    ifName.startsWith("eth") -> 1
+                    ifName.startsWith("ap") -> 2
+                    else -> 3
+                }
+            }
+            .firstOrNull { (_, ip) -> isRfc1918PrivateIp(ip) }
+        if (preferredLan != null) {
+            return preferredLan.second to false
+        }
+
+        // 2. Fallback to any non-tunnel IPv4 (flag if CGNAT 100.64.0.0/10)
+        val fallback = nonTunnel.firstOrNull()?.second
+            ?: candidates.firstOrNull()?.second
+            ?: "127.0.0.1"
+        return fallback to isCgnatIp(fallback)
+    }
+
+    private fun isRfc1918PrivateIp(ip: String): Boolean {
+        val parts = ip.split(".").mapNotNull { it.toIntOrNull() }
+        if (parts.size != 4) return false
+        val a = parts[0]
+        val b = parts[1]
+        return a == 192 && b == 168 ||
+            a == 10 ||
+            (a == 172 && b in 16..31)
+    }
+
+    private fun isCgnatIp(ip: String): Boolean {
+        val parts = ip.split(".").mapNotNull { it.toIntOrNull() }
+        if (parts.size != 4) return false
+        return parts[0] == 100 && parts[1] in 64..127
     }
 
     fun stop() {

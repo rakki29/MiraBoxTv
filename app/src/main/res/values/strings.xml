@@ -139,4 +139,34 @@
     <string name="remote_btn_back">Back</string>
     <string name="remote_btn_home">Home</string>
     <string name="remote_btn_recents">Apps</string>
+
+    <!-- Network & WFD Diagnostics + Phone Sender Mode -->
+    <string name="role_tv_receiver">TV Box Receiver</string>
+    <string name="role_phone_sender">Phone Cast Sender</string>
+    <string name="cgnat_warning_title">Non-LAN IP Detected (%1$s)</string>
+    <string name="cgnat_warning_desc">This IP looks like a VPN, cellular, or CGNAT address. Make sure both the TV Box and your Samsung S8 are connected to the exact same Wi-Fi router (usually 192.168.x.x).</string>
+    <string name="wfd_blocked_title">Samsung Smart View Notice</string>
+    <string name="wfd_blocked_desc">Android TV ROM blocked native system WFD permission (CONFIGURE_WIFI_DISPLAY). Install MiraBox TV on your Samsung S8 too and switch to \"Phone Cast Sender\" on the same Wi-Fi, or open the Box system Wireless Display app.</string>
+    <string name="btn_open_system_cast">Open Box Cast Settings</string>
+
+    <!-- Phone Sender Screen -->
+    <string name="sender_title">Cast This Phone to TV Box</string>
+    <string name="sender_subtitle">Install MiraBox TV on your Samsung phone to mirror directly over Wi-Fi with Forced Landscape, DeX Mode, and TV Remote Control.</string>
+    <string name="sender_discovered_tvs">Discovered MiraBox TV Boxes</string>
+    <string name="sender_scanning">Searching Wi-Fi for MiraBox TV Receivers…</string>
+    <string name="sender_manual_ip_label">Or Enter TV Box IP Address</string>
+    <string name="sender_manual_port_label">Port</string>
+    <string name="sender_btn_connect_cast">Start Mirroring to TV</string>
+    <string name="sender_btn_stop_cast">Stop Mirroring</string>
+    <string name="sender_status_idle">Ready to Cast</string>
+    <string name="sender_status_connecting">Waiting for TV Remote OK Approval…</string>
+    <string name="sender_status_streaming">Streaming Live to %1$s</string>
+    <string name="sender_accessibility_title">Allow TV Remote to Control Phone Apps</string>
+    <string name="sender_accessibility_desc">Enable MiraBox Remote Accessibility so your TV Box remote D-Pad, OK, and Back can tap and control apps on this phone.</string>
+    <string name="sender_accessibility_enabled">Remote Control Accessibility Active</string>
+    <string name="sender_accessibility_btn">Enable Remote Control</string>
+    <string name="accessibility_service_label">MiraBox TV Remote Control</string>
+    <string name="accessibility_service_desc">Forwards TV Box remote D-Pad, Back, Home, and Air-Mouse taps from MiraBox TV Receiver onto your mirrored phone apps.</string>
+    <string name="sender_notification_title">MiraBox TV Casting Active</string>
+    <string name="sender_notification_text">Mirroring phone screen to %1$s</string>
 </resources>

@@ -139,4 +139,34 @@
     <string name="remote_btn_back">رجوع</string>
     <string name="remote_btn_home">الرئيسية</string>
     <string name="remote_btn_recents">التطبيقات</string>
+
+    <!-- Network & WFD Diagnostics + Phone Sender Mode -->
+    <string name="role_tv_receiver">استقبال البوكس (TV)</string>
+    <string name="role_phone_sender">بث الهاتف (Sender)</string>
+    <string name="cgnat_warning_title">تنبيه عنوان الشبكة (%1$s)</string>
+    <string name="cgnat_warning_desc">هذا العنوان يبدو كعنوان VPN أو شريحة اتصال وليس شبكة راوتر محلية (192.168.x.x). تأكد من اتصال البوكس وهاتف سامسونج S8 بنفس شبكة الواي فاي المنزلية.</string>
+    <string name="wfd_blocked_title">ملاحظة بخصوص Smart View على سامسونج</string>
+    <string name="wfd_blocked_desc">نظام أندرويد في البوكس يمنع تطبيقات المتجر من تفعيل Miracast WFD على مستوى النظام (CONFIGURE_WIFI_DISPLAY)، ولذلك لا يظهر في Smart View. الحل الفوري: ثبّت نفس هذا التطبيق على هاتفك سامسونج S8 واختر تبويب «بث الهاتف (Sender)» للاتصال مباشرة بالبوكس مع الموافقة بزر OK ووضع DeX والريموت!</string>
+    <string name="btn_open_system_cast">فتح إعدادات البث بالنظام</string>
+
+    <!-- Phone Sender Screen -->
+    <string name="sender_title">بث شاشة هذا الهاتف إلى البوكس</string>
+    <string name="sender_subtitle">اختر البوكس المكتشف تلقائياً على الواي فاي أو أدخل عنوان IP الظاهر على شاشة التلفاز.</string>
+    <string name="sender_discovered_tvs">أجهزة MiraBox TV المكتشفة على الواي فاي</string>
+    <string name="sender_scanning">جاري البحث عن البوكس على نفس شبكة الواي فاي…</string>
+    <string name="sender_manual_ip_label">أو أدخل عنوان IP البوكس يدوياً</string>
+    <string name="sender_manual_port_label">المنفذ</string>
+    <string name="sender_btn_connect_cast">بدء البث للشاشة</string>
+    <string name="sender_btn_stop_cast">إيقاف البث</string>
+    <string name="sender_status_idle">جاهز للبث</string>
+    <string name="sender_status_connecting">بانتظار ضغط زر OK في ريموت البوكس…</string>
+    <string name="sender_status_streaming">جاري البث الحي إلى %1$s</string>
+    <string name="sender_accessibility_title">تفعيل تحكم ريموت البوكس في تطبيقات الهاتف</string>
+    <string name="sender_accessibility_desc">فعّل خدمة إمكانية الوصول لتتمكن من النقر والتنقل داخل جميع تطبيقات هاتفك S8 باستخدام ريموت البوكس.</string>
+    <string name="sender_accessibility_enabled">تحكم ريموت البوكس مُفعّل</string>
+    <string name="sender_accessibility_btn">تفعيل التحكم بالريموت</string>
+    <string name="accessibility_service_label">تحكم ريموت MiraBox TV</string>
+    <string name="accessibility_service_desc">ينفّذ أوامر ريموت البوكس (D-Pad و OK والرجوع والماوس الهوائي) داخل تطبيقات الهاتف أثناء البث.</string>
+    <string name="sender_notification_title">بث MiraBox TV نشط</string>
+    <string name="sender_notification_text">جاري عكس شاشة الهاتف إلى %1$s</string>
 </resources>

@@ -35,6 +35,7 @@ data class ActiveMirrorSession(
     val remoteAddress: String,
     val channel: ConnectionChannel,
     val rtpPort: Int,
+    val tcpVideoPort: Int = 19001,
     val uibcPort: Int,
     val sourceWidth: Int = 1080,
     val sourceHeight: Int = 2400,
@@ -51,11 +52,15 @@ data class DiscoveredP2pPeer(
 
 data class WifiDirectStatus(
     val hasPermission: Boolean = false,
+    val wifiEnabled: Boolean = true,
     val isP2pEnabled: Boolean = false,
     val isGroupFormed: Boolean = false,
     val groupName: String? = null,
     val groupOwnerIp: String? = null,
+    val p2pDeviceName: String = "",
     val wfdHardwareSupported: Boolean = false,
+    val wfdBlockedByOs: Boolean = false,
+    val wfdDiagnosticNote: String = "",
     val peers: List<DiscoveredP2pPeer> = emptyList(),
     val statusNote: String = ""
 )
@@ -71,9 +76,26 @@ data class UibcTelemetry(
 
 data class NetworkEndpoints(
     val wifiIpAddress: String = "0.0.0.0",
+    val isCgnatOrVpnIp: Boolean = false,
     val rtspPort: Int = 7236,
     val uibcPort: Int = 7237,
     val rtpVideoPort: Int = 19000,
+    val tcpVideoPort: Int = 19001,
     val nsdRegistered: Boolean = false,
     val nsdServiceName: String = ""
 )
+
+data class DiscoveredReceiver(
+    val serviceName: String,
+    val hostAddress: String,
+    val rtspPort: Int,
+    val uibcPort: Int,
+    val tcpVideoPort: Int
+)
+
+enum class SenderState {
+    IDLE,
+    AWAITING_TV_OK,
+    STREAMING,
+    ERROR
+}

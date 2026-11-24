@@ -257,20 +257,22 @@ class MiracastRtspServer(
                         } else {
                             ConnectionChannel.WIFI_LAN_RTSP
                         }
-                        rtpVideoReceiver.start(negotiatedRtpPort)
+                        val tcpVideoPort = 19001
+                        rtpVideoReceiver.start(negotiatedRtpPort, tcpVideoPort)
                         _activeSession.value = ActiveMirrorSession(
                             sessionId = sessionId,
                             deviceName = deviceName,
                             remoteAddress = remoteIp,
                             channel = channel,
                             rtpPort = negotiatedRtpPort,
+                            tcpVideoPort = tcpVideoPort,
                             uibcPort = uibcPort,
                             sourceWidth = sourceWidth,
                             sourceHeight = sourceHeight,
                             isLoopbackDiagnostic = isLoopback
                         )
                         _serverState.value = ServerState.MIRRORING
-                        appendLog("Mirroring PLAY started (RTP=$negotiatedRtpPort, UIBC=$uibcPort)")
+                        appendLog("Mirroring PLAY started (RTP=$negotiatedRtpPort, TCP=$tcpVideoPort, UIBC=$uibcPort)")
                         sendRtspResponse(
                             writer,
                             "200 OK",

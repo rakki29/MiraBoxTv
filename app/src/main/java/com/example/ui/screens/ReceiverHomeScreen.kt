@@ -29,6 +29,7 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Router
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.SettingsRemote
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.WifiTethering
 import androidx.compose.material3.Icon
@@ -77,6 +78,7 @@ fun ReceiverHomeScreen(
     onDisconnect: () -> Unit,
     onScanPeers: () -> Unit,
     onInvitePeer: (String) -> Unit,
+    onOpenSystemCastSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val statusColor by animateColorAsState(
@@ -101,7 +103,10 @@ fun ReceiverHomeScreen(
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 18.dp),
+            contentPadding = PaddingValues(
+                horizontal = if (isWide) 28.dp else 18.dp,
+                vertical = if (isWide) 24.dp else 16.dp
+            ),
             verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
             // Hero Banner Card with generated atmospheric backdrop
@@ -281,6 +286,81 @@ fun ReceiverHomeScreen(
                                     }
                                 )
                             }
+                        }
+                    }
+                }
+            }
+
+            // CGNAT / VPN IP Warning (e.g. 100.114.x.x instead of 192.168.x.x)
+            if (uiState.endpoints.isCgnatOrVpnIp) {
+                item {
+                    TvGlassCard(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.WarningAmber,
+                                contentDescription = null,
+                                tint = CoralError,
+                                modifier = Modifier.size(28.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = appString(R.string.cgnat_warning_title, uiState.endpoints.wifiIpAddress),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = CoralError
+                                )
+                                Text(
+                                    text = appString(R.string.cgnat_warning_desc),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = TextSecondary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Samsung Smart View / WFD OS Permission Diagnostic Card
+            if (uiState.p2pStatus.wfdBlockedByOs) {
+                item {
+                    TvGlassCard(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.CastConnected,
+                                    contentDescription = null,
+                                    tint = ElectricCyan,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = appString(R.string.wfd_blocked_title),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = ElectricCyan
+                                    )
+                                    Text(
+                                        text = appString(R.string.wfd_blocked_desc),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = TextSecondary
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            TvSecondaryButton(
+                                text = appString(R.string.btn_open_system_cast),
+                                onClick = onOpenSystemCastSettings,
+                                modifier = Modifier.testTag("open_system_cast_settings_button")
+                            )
                         }
                     }
                 }

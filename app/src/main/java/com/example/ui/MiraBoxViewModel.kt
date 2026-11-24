@@ -16,6 +16,7 @@ import com.example.data.UibcControlMode
 import com.example.miracast.ActiveMirrorSession
 import com.example.miracast.ApprovalDecision
 import com.example.miracast.ConnectionChannel
+import com.example.miracast.DiscoveredReceiver
 import com.example.miracast.NetworkEndpoints
 import com.example.miracast.PendingConnectionRequest
 import com.example.miracast.ServerState
@@ -25,6 +26,9 @@ import com.example.network.MiracastRtspServer
 import com.example.network.RtpVideoReceiver
 import com.example.network.UibcServer
 import com.example.network.WifiDirectController
+import com.example.sender.NsdReceiverBrowser
+import com.example.sender.SenderRuntimeBus
+import com.example.sender.SenderRuntimeStatus
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,7 +44,8 @@ enum class AppDestination {
     RECEIVER,
     STAGE,
     SETTINGS,
-    REMOTE
+    REMOTE,
+    SENDER
 }
 
 data class AirMouseState(
@@ -71,7 +76,9 @@ data class MiraBoxUiState(
     val currentDestination: AppDestination = AppDestination.RECEIVER,
     val airMouse: AirMouseState = AirMouseState(),
     val loopbackAppState: LoopbackAppState = LoopbackAppState(),
-    val stageHudVisible: Boolean = false
+    val stageHudVisible: Boolean = false,
+    val discoveredReceivers: List<DiscoveredReceiver> = emptyList(),
+    val senderStatus: SenderRuntimeStatus = SenderRuntimeStatus()
 )
 
 class MiraBoxViewModel(application: Application) : AndroidViewModel(application) {
@@ -79,6 +86,7 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
     private val settingsRepository = SettingsRepository(application)
     private val uibcServer = UibcServer(viewModelScope)
     private val rtpVideoReceiver = RtpVideoReceiver(viewModelScope)
+    private val nsdReceiverBrowser = NsdReceiverBrowser(application)
 
     private val _latestSettings = MutableStateFlow(ReceiverSettings())
 
@@ -147,11 +155,19 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
         StreamTelemetrySnapshot(session, frames, res, uibc, logs)
     }
 
+    private val senderFlow = combine(
+        nsdReceiverBrowser.receivers,
+        SenderRuntimeBus.status
+    ) { receivers, status ->
+        receivers to status
+    }
+
     val uiState: StateFlow<MiraBoxUiState> = combine(
         serverCoreFlow,
         streamTelemetryFlow,
-        navAndCursorFlow
-    ) { core, stream, nav ->
+        navAndCursorFlow,
+        senderFlow
+    ) { core, stream, nav, sender ->
         MiraBoxUiState(
             settings = core.settings,
             serverState = core.serverState,
@@ -167,7 +183,9 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
             currentDestination = nav.dest,
             airMouse = nav.mouse,
             loopbackAppState = nav.loopback,
-            stageHudVisible = nav.hud
+            stageHudVisible = nav.hud,
+            discoveredReceivers = sender.first,
+            senderStatus = sender.second
         )
     }.stateIn(
         scope = viewModelScope,
@@ -263,6 +281,15 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
         if (destination != AppDestination.STAGE) {
             _stageHudVisible.value = false
         }
+        if (destination == AppDestination.SENDER) {
+            nsdReceiverBrowser.startDiscovery()
+        } else {
+            nsdReceiverBrowser.stopDiscovery()
+        }
+    }
+
+    fun refreshSenderDiscovery() {
+        nsdReceiverBrowser.startDiscovery()
     }
 
     fun toggleStageHud(visible: Boolean? = null) {
@@ -485,6 +512,7 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
 
     override fun onCleared() {
         super.onCleared()
+        nsdReceiverBrowser.stopDiscovery()
         rtspServer.stop()
         wifiDirectController.stop()
     }

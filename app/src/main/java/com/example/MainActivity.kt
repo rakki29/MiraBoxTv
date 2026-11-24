@@ -1,8 +1,13 @@
 package com.example
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -34,6 +39,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Cast
 import androidx.compose.material.icons.rounded.DesktopWindows
 import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.SettingsRemote
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Icon
@@ -48,15 +54,21 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.AppLanguage
+import com.example.sender.ScreenCastSenderService
 import com.example.ui.AppDestination
 import com.example.ui.MiraBoxUiState
 import com.example.ui.MiraBoxViewModel
@@ -65,6 +77,7 @@ import com.example.ui.components.SecurityApprovalDialog
 import com.example.ui.components.appString
 import com.example.ui.screens.DisplaySettingsScreen
 import com.example.ui.screens.MirrorStageScreen
+import com.example.ui.screens.PhoneSenderScreen
 import com.example.ui.screens.ReceiverHomeScreen
 import com.example.ui.screens.RemoteControlScreen
 import com.example.ui.theme.ElectricCyan
@@ -77,6 +90,14 @@ import com.example.ui.theme.ObsidianSurface
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
+private data class PendingCastTarget(
+    val host: String,
+    val rtspPort: Int,
+    val uibcPort: Int,
+    val videoPort: Int,
+    val targetName: String
+)
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -84,13 +105,43 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         setContent {
+            val context = LocalContext.current
             val viewModel: MiraBoxViewModel = viewModel()
             val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-            val permissionLauncher = rememberLauncherForActivityResult(
+            var pendingCastTarget by remember { mutableStateOf<PendingCastTarget?>(null) }
+
+            val wifiPermissionLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.RequestMultiplePermissions()
             ) {
                 viewModel.onPermissionResult()
+            }
+
+            val projectionLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.StartActivityForResult()
+            ) { result ->
+                val target = pendingCastTarget
+                val data = result.data
+                if (result.resultCode == Activity.RESULT_OK && data != null && target != null) {
+                    val intent = Intent(context, ScreenCastSenderService::class.java).apply {
+                        action = ScreenCastSenderService.ACTION_START
+                        putExtra(ScreenCastSenderService.EXTRA_RESULT_CODE, result.resultCode)
+                        putExtra(ScreenCastSenderService.EXTRA_RESULT_DATA, data)
+                        putExtra(ScreenCastSenderService.EXTRA_HOST, target.host)
+                        putExtra(ScreenCastSenderService.EXTRA_RTSP_PORT, target.rtspPort)
+                        putExtra(ScreenCastSenderService.EXTRA_UIBC_PORT, target.uibcPort)
+                        putExtra(ScreenCastSenderService.EXTRA_VIDEO_PORT, target.videoPort)
+                        putExtra(ScreenCastSenderService.EXTRA_TARGET_NAME, target.targetName)
+                    }
+                    ContextCompat.startForegroundService(context, intent)
+                }
+            }
+
+            val notificationPermLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.RequestPermission()
+            ) {
+                val mpm = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                projectionLauncher.launch(mpm.createScreenCaptureIntent())
             }
 
             val requestWifiPermissions = {
@@ -99,7 +150,46 @@ class MainActivity : ComponentActivity() {
                 } else {
                     arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
                 }
-                permissionLauncher.launch(perms)
+                wifiPermissionLauncher.launch(perms)
+            }
+
+            val startPhoneCast: (String, Int, Int, Int, String) -> Unit = { host, rtsp, uibc, video, name ->
+                pendingCastTarget = PendingCastTarget(host, rtsp, uibc, video, name)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    notificationPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else {
+                    val mpm = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                    projectionLauncher.launch(mpm.createScreenCaptureIntent())
+                }
+            }
+
+            val stopPhoneCast: () -> Unit = {
+                val intent = Intent(context, ScreenCastSenderService::class.java).apply {
+                    action = ScreenCastSenderService.ACTION_STOP
+                }
+                context.startService(intent)
+            }
+
+            val openSystemCastSettings: () -> Unit = {
+                val castIntent = Intent(Settings.ACTION_CAST_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                runCatching { context.startActivity(castIntent) }
+                    .onFailure {
+                        runCatching {
+                            context.startActivity(
+                                Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }
+                    }
+            }
+
+            val openAccessibilitySettings: () -> Unit = {
+                runCatching {
+                    context.startActivity(
+                        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }
             }
 
             MiraBoxTheme {
@@ -107,7 +197,11 @@ class MainActivity : ComponentActivity() {
                     MiraBoxAppShell(
                         uiState = uiState,
                         viewModel = viewModel,
-                        onRequestWifiPermission = requestWifiPermissions
+                        onRequestWifiPermission = requestWifiPermissions,
+                        onOpenSystemCastSettings = openSystemCastSettings,
+                        onStartPhoneCast = startPhoneCast,
+                        onStopPhoneCast = stopPhoneCast,
+                        onOpenAccessibilitySettings = openAccessibilitySettings
                     )
                 }
             }
@@ -119,7 +213,11 @@ class MainActivity : ComponentActivity() {
 private fun MiraBoxAppShell(
     uiState: MiraBoxUiState,
     viewModel: MiraBoxViewModel,
-    onRequestWifiPermission: () -> Unit
+    onRequestWifiPermission: () -> Unit,
+    onOpenSystemCastSettings: () -> Unit,
+    onStartPhoneCast: (String, Int, Int, Int, String) -> Unit,
+    onStopPhoneCast: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit
 ) {
     val isFullscreenStage =
         uiState.currentDestination == AppDestination.STAGE && uiState.activeSession != null
@@ -148,6 +246,12 @@ private fun MiraBoxAppShell(
             label = appString(R.string.nav_remote),
             icon = Icons.Rounded.SettingsRemote,
             testTag = "nav_remote"
+        ),
+        NavItem(
+            destination = AppDestination.SENDER,
+            label = appString(R.string.role_phone_sender),
+            icon = Icons.Rounded.PhoneAndroid,
+            testTag = "nav_sender"
         )
     )
 
@@ -179,16 +283,17 @@ private fun MiraBoxAppShell(
                         modifier = Modifier
                             .fillMaxSize()
                             .windowInsetsPadding(WindowInsets.safeDrawing)
+                            .padding(start = 12.dp, top = 8.dp, bottom = 8.dp)
                     ) {
                         NavigationRail(
                             modifier = Modifier
                                 .fillMaxHeight()
-                                .width(104.dp)
-                                .border(1.dp, ObsidianBorder),
+                                .width(112.dp)
+                                .border(1.dp, ObsidianBorder, RoundedCornerShape(18.dp)),
                             containerColor = ObsidianSurface,
                             header = {
                                 Column(
-                                    modifier = Modifier.padding(top = 12.dp, bottom = 12.dp),
+                                    modifier = Modifier.padding(top = 14.dp, bottom = 10.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                     verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
@@ -211,7 +316,7 @@ private fun MiraBoxAppShell(
                                 }
                             }
                         ) {
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(6.dp))
                             navItems.forEach { item ->
                                 val selected = uiState.currentDestination == item.destination
                                 NavigationRailItem(
@@ -245,6 +350,10 @@ private fun MiraBoxAppShell(
                             uiState = uiState,
                             viewModel = viewModel,
                             onRequestWifiPermission = onRequestWifiPermission,
+                            onOpenSystemCastSettings = onOpenSystemCastSettings,
+                            onStartPhoneCast = onStartPhoneCast,
+                            onStopPhoneCast = onStopPhoneCast,
+                            onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight()
@@ -321,6 +430,10 @@ private fun MiraBoxAppShell(
                             uiState = uiState,
                             viewModel = viewModel,
                             onRequestWifiPermission = onRequestWifiPermission,
+                            onOpenSystemCastSettings = onOpenSystemCastSettings,
+                            onStartPhoneCast = onStartPhoneCast,
+                            onStopPhoneCast = onStopPhoneCast,
+                            onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(innerPadding)
@@ -349,6 +462,10 @@ private fun DestinationContent(
     uiState: MiraBoxUiState,
     viewModel: MiraBoxViewModel,
     onRequestWifiPermission: () -> Unit,
+    onOpenSystemCastSettings: () -> Unit,
+    onStartPhoneCast: (String, Int, Int, Int, String) -> Unit,
+    onStopPhoneCast: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     when (uiState.currentDestination) {
@@ -361,6 +478,7 @@ private fun DestinationContent(
             onDisconnect = viewModel::disconnectSession,
             onScanPeers = viewModel::scanWifiDirectPeers,
             onInvitePeer = viewModel::invitePeer,
+            onOpenSystemCastSettings = onOpenSystemCastSettings,
             modifier = modifier
         )
 
@@ -397,6 +515,15 @@ private fun DestinationContent(
             onSetUibcMode = viewModel::setUibcControlMode,
             onSetAirMouseSpeed = viewModel::setAirMouseSpeed,
             onSendVirtualKey = viewModel::sendVirtualRemoteKey,
+            modifier = modifier
+        )
+
+        AppDestination.SENDER -> PhoneSenderScreen(
+            uiState = uiState,
+            onRefreshDiscovery = viewModel::refreshSenderDiscovery,
+            onStartCast = onStartPhoneCast,
+            onStopCast = onStopPhoneCast,
+            onOpenAccessibilitySettings = onOpenAccessibilitySettings,
             modifier = modifier
         )
     }

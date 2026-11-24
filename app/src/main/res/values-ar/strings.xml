@@ -124,8 +124,8 @@
     <string name="uibc_client_waiting">بانتظار الاتصال على منفذ %1$d</string>
 
     <!-- Key Mapping Guide -->
-    <string name="map_dpad">الأسهم ← تحريك مؤشر الماوس الهوائي أو التمرير الآمن داخل التطبيق</string>
-    <string name="map_ok">زر OK ← النقر على موضع المؤشر أو العنصر المحدد</string>
+    <string name="map_dpad">الأسهم (يمين/يسار/أعلى/أسفل) ← تحريك إطار التحديد الأزرق بين تطبيقات الهاتف وأزراره</string>
+    <string name="map_ok">زر OK ← فتح التطبيق أو الضغط على الزر المحدد بإطار التحديد</string>
     <string name="map_back">رجوع (ضغطة سريعة) ← رجوع بالهاتف  |  ضغط مطوّل / Menu ← قائمة التلفاز</string>
     <string name="map_menu">أزرار P+ / P- ← التمرير السلس للأعلى والأسفل أو التالي/السابق</string>
     <string name="map_vol">أزرار الصوت وكتم الصوت والتشغيل ← التحكم بصوت وميديا الهاتف</string>
@@ -158,7 +158,7 @@
 
     <!-- Phone Sender Screen -->
     <string name="sender_title">بث شاشة هذا الهاتف إلى البوكس</string>
-    <string name="sender_subtitle">اختر البوكس المكتشف تلقائياً على الواي فاي أو أدخل عنوان IP الظاهر على شاشة التلفاز.</string>
+    <string name="sender_subtitle">اختر البوكس المكتشف تلقائياً على الواي فاي أو أدخل عنوان IP، وسيتم تحويل الهاتف تلقائياً لوضع التابلت 16:9 مثل SecondScreen.</string>
     <string name="sender_discovered_tvs">أجهزة MiraBox TV المكتشفة على الواي فاي</string>
     <string name="sender_scanning">جاري البحث عن البوكس على نفس شبكة الواي فاي…</string>
     <string name="sender_manual_ip_label">أو أدخل عنوان IP البوكس يدوياً</string>
@@ -169,18 +169,36 @@
     <string name="sender_status_connecting">بانتظار ضغط زر OK في ريموت البوكس…</string>
     <string name="sender_status_streaming">جاري البث الحي إلى %1$s</string>
     <string name="sender_accessibility_title">تفعيل تحكم ريموت البوكس في تطبيقات الهاتف</string>
-    <string name="sender_accessibility_desc">فعّل خدمة إمكانية الوصول لتتمكن من النقر والتنقل داخل جميع تطبيقات هاتفك S8 باستخدام ريموت البوكس.</string>
+    <string name="sender_accessibility_desc">فعّل خدمة إمكانية الوصول لتتمكن أسهم الريموت و OK من تحديد وفتح التطبيقات واحداً تلو الآخر على هاتفك S8.</string>
     <string name="sender_accessibility_enabled">تحكم ريموت البوكس مُفعّل</string>
     <string name="sender_accessibility_btn">تفعيل التحكم بالريموت</string>
     <string name="sender_overlay_title">تحويل تطبيقات الهاتف للوضع الأفقي تلقائياً</string>
     <string name="sender_overlay_desc">امنح إذن «الظهور فوق التطبيقات» ليقوم MiraBox بقلب تطبيقات الهاتف للعرض الأفقي الحقيقي 16:9 عند تفعيل وضع التلفاز أو DeX.</string>
     <string name="sender_overlay_enabled">القفل الأفقي الحقيقي للتطبيقات مُفعّل</string>
     <string name="sender_overlay_btn">تفعيل الوضع الأفقي</string>
+    <string name="sender_secondscreen_title">وضع التابلت (مثل تطبيق SecondScreen)</string>
+    <string name="sender_secondscreen_desc">يحوّل شاشة الهاتف عند بدء البث إلى واجهة تابلت عريضة 16:9 مع إرجاع الشاشة لوضعها الأصلي تلقائياً عند إيقاف البث.</string>
+    <string name="sender_ss_off">حجم الهاتف الأصلي</string>
+    <string name="sender_ss_tablet_720">تابلت 720p (160 DPI)</string>
+    <string name="sender_ss_tablet_1080">تابلت 1080p (213 DPI)</string>
+    <string name="sender_ss_smooth">سريع 576p</string>
+    <string name="sender_launch_tablet_grid">فتح واجهة التابلت للتطبيقات تلقائياً</string>
+    <string name="sender_launch_tablet_grid_desc">يفتح شبكة تطبيقات أفقية 16:9 عند بدء البث لتسهيل التنقل بين كل تطبيقات الهاتف بأسهم الريموت و OK.</string>
+    <string name="sender_write_settings_btn">تفعيل قفل التدوير بالنظام</string>
+    <string name="sender_write_settings_ok">قفل تدوير النظام مُفعّل</string>
+    <string name="sender_adb_granted">تحويل الدقة و DPI التابلت على مستوى النظام مُفعّل (SecondScreen Pro)</string>
+    <string name="sender_adb_hint">اختياري لتغيير DPI كل تطبيقات سامسونج ومتصفح كروم إلى تابلت حقيقي: نفّذ هذا الأمر مرة واحدة عبر ADB</string>
+    <string name="sender_adb_copy_btn">نسخ أمر ADB</string>
+    <string name="sender_adb_copied">تم النسخ!</string>
+    <string name="tablet_launcher_title">واجهة التابلت MiraBox (16:9)</string>
+    <string name="tablet_launcher_subtitle">متصل بـ %1$s • تنقّل بين التطبيقات بأسهم الريموت و OK</string>
+    <string name="tablet_launcher_subtitle_hd">وضع SecondScreen نشط • يبث إلى %1$s</string>
+    <string name="tablet_btn_mirabox">تطبيق MiraBox</string>
     <string name="sender_audio_active">بث الصوت الداخلي للتلفاز نشط (PCM 48kHz)</string>
     <string name="sender_audio_android9_limit">نظام أندرويد 9 (S8) يمنع التقاط الصوت الداخلي للتطبيقات (يتطلب أندرويد 10+؛ اربط البلوتوث بالتلفاز للصوت)</string>
     <string name="sender_audio_perm_missing">لم يتم منح إذن التقاط الصوت</string>
     <string name="accessibility_service_label">تحكم ريموت MiraBox TV</string>
-    <string name="accessibility_service_desc">ينفّذ أوامر ريموت البوكس (D-Pad و OK و P+/- والرجوع والماوس الهوائي) داخل تطبيقات الهاتف أثناء البث.</string>
+    <string name="accessibility_service_desc">يرسم إطار التحديد وينفّذ أوامر ريموت البوكس (الأسهم و OK و P+/- والرجوع) داخل تطبيقات الهاتف أثناء البث.</string>
     <string name="sender_notification_title">بث MiraBox TV نشط</string>
     <string name="sender_notification_text">جاري عكس شاشة الهاتف إلى %1$s</string>
 </resources>

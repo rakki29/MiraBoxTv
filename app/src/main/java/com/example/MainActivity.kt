@@ -134,6 +134,14 @@ class MainActivity : ComponentActivity() {
                         putExtra(ScreenCastSenderService.EXTRA_VIDEO_PORT, target.videoPort)
                         putExtra(ScreenCastSenderService.EXTRA_AUDIO_PORT, 19002)
                         putExtra(ScreenCastSenderService.EXTRA_TARGET_NAME, target.targetName)
+                        putExtra(
+                            ScreenCastSenderService.EXTRA_SECOND_SCREEN_PROFILE,
+                            uiState.settings.secondScreenProfile.name
+                        )
+                        putExtra(
+                            ScreenCastSenderService.EXTRA_LAUNCH_TABLET_LAUNCHER,
+                            uiState.settings.launchTabletLauncherOnCast
+                        )
                     }
                     ContextCompat.startForegroundService(context, intent)
                 }
@@ -212,6 +220,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            val openWriteSettings: () -> Unit = {
+                runCatching {
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_WRITE_SETTINGS,
+                        Uri.parse("package:${context.packageName}")
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                }
+            }
+
             MiraBoxTheme {
                 LocalizedEnvironment(language = uiState.settings.language) {
                     MiraBoxAppShell(
@@ -222,7 +240,8 @@ class MainActivity : ComponentActivity() {
                         onStartPhoneCast = startPhoneCast,
                         onStopPhoneCast = stopPhoneCast,
                         onOpenAccessibilitySettings = openAccessibilitySettings,
-                        onOpenOverlaySettings = openOverlaySettings
+                        onOpenOverlaySettings = openOverlaySettings,
+                        onOpenWriteSettings = openWriteSettings
                     )
                 }
             }
@@ -239,7 +258,8 @@ private fun MiraBoxAppShell(
     onStartPhoneCast: (String, Int, Int, Int, String) -> Unit,
     onStopPhoneCast: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
-    onOpenOverlaySettings: () -> Unit
+    onOpenOverlaySettings: () -> Unit,
+    onOpenWriteSettings: () -> Unit
 ) {
     val isFullscreenStage =
         uiState.currentDestination == AppDestination.STAGE && uiState.activeSession != null
@@ -377,6 +397,7 @@ private fun MiraBoxAppShell(
                             onStopPhoneCast = onStopPhoneCast,
                             onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                             onOpenOverlaySettings = onOpenOverlaySettings,
+                            onOpenWriteSettings = onOpenWriteSettings,
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight()
@@ -458,6 +479,7 @@ private fun MiraBoxAppShell(
                             onStopPhoneCast = onStopPhoneCast,
                             onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                             onOpenOverlaySettings = onOpenOverlaySettings,
+                            onOpenWriteSettings = onOpenWriteSettings,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(innerPadding)
@@ -491,6 +513,7 @@ private fun DestinationContent(
     onStopPhoneCast: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onOpenOverlaySettings: () -> Unit,
+    onOpenWriteSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     when (uiState.currentDestination) {
@@ -550,6 +573,9 @@ private fun DestinationContent(
             onStopCast = onStopPhoneCast,
             onOpenAccessibilitySettings = onOpenAccessibilitySettings,
             onOpenOverlaySettings = onOpenOverlaySettings,
+            onOpenWriteSettings = onOpenWriteSettings,
+            onSetSecondScreenProfile = viewModel::setSecondScreenProfile,
+            onSetLaunchTabletLauncher = viewModel::setLaunchTabletLauncherOnCast,
             modifier = modifier
         )
     }

@@ -379,6 +379,7 @@ private fun MiracastTextureSurface(
     modifier: Modifier = Modifier
 ) {
     var textureViewRef by remember { mutableStateOf<TextureView?>(null) }
+    var lastAppliedSignature by remember { mutableStateOf("") }
 
     LaunchedEffect(
         textureViewRef,
@@ -390,14 +391,18 @@ private fun MiracastTextureSurface(
     ) {
         val tv = textureViewRef ?: return@LaunchedEffect
         if (tv.width > 0 && tv.height > 0) {
-            applyVideoTransformMatrix(
-                textureView = tv,
-                streamW = streamWidth,
-                streamH = streamHeight,
-                displayMode = displayMode,
-                rotation = landscapeRotation,
-                scaleMode = aspectScaleMode
-            )
+            val sig = "${tv.width}x${tv.height}|$streamWidth|$streamHeight|$displayMode|$landscapeRotation|$aspectScaleMode"
+            if (sig != lastAppliedSignature) {
+                lastAppliedSignature = sig
+                applyVideoTransformMatrix(
+                    textureView = tv,
+                    streamW = streamWidth,
+                    streamH = streamHeight,
+                    displayMode = displayMode,
+                    rotation = landscapeRotation,
+                    scaleMode = aspectScaleMode
+                )
+            }
         }
     }
 
@@ -410,9 +415,12 @@ private fun MiracastTextureSurface(
     AndroidView(
         factory = { context ->
             TextureView(context).apply {
+                isOpaque = true
                 surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                     override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
                         onAttachSurface(Surface(st))
+                        val sig = "${w}x$h|$streamWidth|$streamHeight|$displayMode|$landscapeRotation|$aspectScaleMode"
+                        lastAppliedSignature = sig
                         applyVideoTransformMatrix(
                             textureView = this@apply,
                             streamW = streamWidth,
@@ -424,14 +432,18 @@ private fun MiracastTextureSurface(
                     }
 
                     override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
-                        applyVideoTransformMatrix(
-                            textureView = this@apply,
-                            streamW = streamWidth,
-                            streamH = streamHeight,
-                            displayMode = displayMode,
-                            rotation = landscapeRotation,
-                            scaleMode = aspectScaleMode
-                        )
+                        val sig = "${w}x$h|$streamWidth|$streamHeight|$displayMode|$landscapeRotation|$aspectScaleMode"
+                        if (sig != lastAppliedSignature) {
+                            lastAppliedSignature = sig
+                            applyVideoTransformMatrix(
+                                textureView = this@apply,
+                                streamW = streamWidth,
+                                streamH = streamHeight,
+                                displayMode = displayMode,
+                                rotation = landscapeRotation,
+                                scaleMode = aspectScaleMode
+                            )
+                        }
                     }
 
                     override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {

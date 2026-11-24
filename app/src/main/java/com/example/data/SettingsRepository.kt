@@ -24,6 +24,8 @@ class SettingsRepository(private val context: Context) {
         val DEX_TASKBAR_ENABLED = booleanPreferencesKey("dex_taskbar_enabled")
         val UIBC_CONTROL_MODE = stringPreferencesKey("uibc_control_mode")
         val AIR_MOUSE_SPEED = floatPreferencesKey("air_mouse_speed")
+        val SECOND_SCREEN_PROFILE = stringPreferencesKey("second_screen_profile")
+        val LAUNCH_TABLET_LAUNCHER = booleanPreferencesKey("launch_tablet_launcher")
         val LANGUAGE = stringPreferencesKey("language")
         val TRUSTED_DEVICES = stringSetPreferencesKey("trusted_devices")
     }
@@ -48,9 +50,14 @@ class SettingsRepository(private val context: Context) {
             dexTaskbarEnabled = prefs[Keys.DEX_TASKBAR_ENABLED] ?: true,
             uibcControlMode = enumValueOrDefault(
                 prefs[Keys.UIBC_CONTROL_MODE],
-                UibcControlMode.HYBRID_AUTO
+                UibcControlMode.DPAD_KEYS
             ),
             airMouseSpeed = prefs[Keys.AIR_MOUSE_SPEED] ?: 1.0f,
+            secondScreenProfile = enumValueOrDefault(
+                prefs[Keys.SECOND_SCREEN_PROFILE],
+                SecondScreenProfile.TABLET_720P
+            ),
+            launchTabletLauncherOnCast = prefs[Keys.LAUNCH_TABLET_LAUNCHER] ?: true,
             language = enumValueOrDefault(prefs[Keys.LANGUAGE], AppLanguage.ARABIC),
             trustedDevices = prefs[Keys.TRUSTED_DEVICES] ?: emptySet()
         )
@@ -91,6 +98,14 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setAirMouseSpeed(speed: Float) {
         context.receiverDataStore.edit { it[Keys.AIR_MOUSE_SPEED] = speed.coerceIn(0.4f, 2.5f) }
+    }
+
+    suspend fun setSecondScreenProfile(profile: SecondScreenProfile) {
+        context.receiverDataStore.edit { it[Keys.SECOND_SCREEN_PROFILE] = profile.name }
+    }
+
+    suspend fun setLaunchTabletLauncherOnCast(enabled: Boolean) {
+        context.receiverDataStore.edit { it[Keys.LAUNCH_TABLET_LAUNCHER] = enabled }
     }
 
     suspend fun setLanguage(language: AppLanguage) {

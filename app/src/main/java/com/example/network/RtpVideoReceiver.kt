@@ -151,7 +151,7 @@ class RtpVideoReceiver(private val scope: CoroutineScope) {
                             )
                             if (!isConfig) {
                                 totalFramesCount += 1L
-                                if (totalFramesCount <= 3L || totalFramesCount % 15L == 0L) {
+                                if (totalFramesCount <= 3L || totalFramesCount % 150L == 0L) {
                                     _receivedFrames.value = totalFramesCount
                                 }
                             }
@@ -227,9 +227,19 @@ class RtpVideoReceiver(private val scope: CoroutineScope) {
         runCatching {
             val safeW = width.coerceAtLeast(320)
             val safeH = height.coerceAtLeast(320)
-            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, safeW, safeH)
+            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, safeW, safeH).apply {
+                setInteger(MediaFormat.KEY_PRIORITY, 0)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                    setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                }
+            }
             val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-            codec.configure(format, surface, null, 0)
+            runCatching {
+                codec.configure(format, surface, null, 0)
+            }.onFailure {
+                val basic = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, safeW, safeH)
+                codec.configure(basic, surface, null, 0)
+            }
             codec.start()
             decoder = codec
             configuredWidth = safeW
@@ -296,6 +306,28 @@ class RtpVideoReceiver(private val scope: CoroutineScope) {
         }
     }
 
+    private fun drainOutputBuffersLocked(codec: MediaCodec) {
+        val info = MediaCodec.BufferInfo()
+        var outputIndex = codec.dequeueOutputBuffer(info, 0)
+        while (outputIndex >= 0 || outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+            if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                val outFormat = codec.outputFormat
+                if (outFormat.containsKey(MediaFormat.KEY_WIDTH) &&
+                    outFormat.containsKey(MediaFormat.KEY_HEIGHT)
+                ) {
+                    val w = outFormat.getInteger(MediaFormat.KEY_WIDTH)
+                    val h = outFormat.getInteger(MediaFormat.KEY_HEIGHT)
+                    if (w > 0 && h > 0 && _streamResolution.value != (w to h)) {
+                        _streamResolution.value = w to h
+                    }
+                }
+            } else if (outputIndex >= 0) {
+                codec.releaseOutputBuffer(outputIndex, true)
+            }
+            outputIndex = codec.dequeueOutputBuffer(info, 0)
+        }
+    }
+
     private fun queueToCodecLocked(
         codec: MediaCodec,
         data: ByteArray,
@@ -303,7 +335,13 @@ class RtpVideoReceiver(private val scope: CoroutineScope) {
         ptsUs: Long = System.nanoTime() / 1000L
     ) {
         runCatching {
-            val inputIndex = codec.dequeueInputBuffer(15_000)
+            // Drain ready output frames first so input queue is free and P-frames are never dropped
+            drainOutputBuffersLocked(codec)
+            var inputIndex = codec.dequeueInputBuffer(20_000)
+            if (inputIndex < 0) {
+                drainOutputBuffersLocked(codec)
+                inputIndex = codec.dequeueInputBuffer(25_000)
+            }
             if (inputIndex >= 0) {
                 val inputBuffer: ByteBuffer? = codec.getInputBuffer(inputIndex)
                 inputBuffer?.clear()
@@ -316,22 +354,7 @@ class RtpVideoReceiver(private val scope: CoroutineScope) {
                     bufferFlags
                 )
             }
-            val info = MediaCodec.BufferInfo()
-            var outputIndex = codec.dequeueOutputBuffer(info, 0)
-            while (outputIndex >= 0) {
-                codec.releaseOutputBuffer(outputIndex, true)
-                val outFormat = codec.outputFormat
-                if (outFormat.containsKey(MediaFormat.KEY_WIDTH) &&
-                    outFormat.containsKey(MediaFormat.KEY_HEIGHT)
-                ) {
-                    val w = outFormat.getInteger(MediaFormat.KEY_WIDTH)
-                    val h = outFormat.getInteger(MediaFormat.KEY_HEIGHT)
-                    if (w > 0 && h > 0 && _streamResolution.value != (w to h)) {
-                        _streamResolution.value = w to h
-                    }
-                }
-                outputIndex = codec.dequeueOutputBuffer(info, 0)
-            }
+            drainOutputBuffersLocked(codec)
         }
     }
 

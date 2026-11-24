@@ -31,6 +31,17 @@ enum class DexDpiProfile(
     COMPACT_720P_120DPI(1280, 720, 60, 120, "00000080")
 }
 
+enum class SecondScreenProfile(
+    val width: Int,
+    val height: Int,
+    val dpi: Int
+) {
+    OFF(0, 0, 0),
+    TABLET_720P(1280, 720, 160),
+    TABLET_1080P(1920, 1080, 213),
+    TABLET_SMOOTH(1024, 576, 136)
+}
+
 enum class UibcControlMode {
     HYBRID_AUTO,
     DPAD_KEYS,
@@ -50,8 +61,10 @@ data class ReceiverSettings(
     val aspectScaleMode: AspectScaleMode = AspectScaleMode.FILL_WIDESCREEN,
     val dexDpiProfile: DexDpiProfile = DexDpiProfile.TV_1080P_160DPI,
     val dexTaskbarEnabled: Boolean = true,
-    val uibcControlMode: UibcControlMode = UibcControlMode.HYBRID_AUTO,
+    val uibcControlMode: UibcControlMode = UibcControlMode.DPAD_KEYS,
     val airMouseSpeed: Float = 1.0f,
+    val secondScreenProfile: SecondScreenProfile = SecondScreenProfile.TABLET_720P,
+    val launchTabletLauncherOnCast: Boolean = true,
     val language: AppLanguage = AppLanguage.ARABIC,
     val trustedDevices: Set<String> = emptySet()
 )

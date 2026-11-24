@@ -65,6 +65,20 @@ import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.TabletAndroid
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import com.example.data.SecondScreenProfile
+import com.example.sender.SecondScreenController
+import com.example.ui.components.TvSelectableChip
+import com.example.ui.theme.ObsidianBg
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PhoneSenderScreen(
     uiState: MiraBoxUiState,
@@ -73,21 +87,34 @@ fun PhoneSenderScreen(
     onStopCast: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onOpenOverlaySettings: () -> Unit,
+    onOpenWriteSettings: () -> Unit,
+    onSetSecondScreenProfile: (SecondScreenProfile) -> Unit,
+    onSetLaunchTabletLauncher: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val sender = uiState.senderStatus
     var accessibilityActive by remember { mutableStateOf(MiraBoxRemoteAccessibilityService.isEnabled()) }
     var overlayGranted by remember {
         mutableStateOf(Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context))
     }
+    var writeSettingsGranted by remember {
+        mutableStateOf(SecondScreenController.hasWriteSettingsPermission(context))
+    }
+    var writeSecureGranted by remember {
+        mutableStateOf(SecondScreenController.hasWriteSecureSettingsPermission(context))
+    }
+    var adbCopied by remember { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 accessibilityActive = MiraBoxRemoteAccessibilityService.isEnabled()
                 overlayGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
+                writeSettingsGranted = SecondScreenController.hasWriteSettingsPermission(context)
+                writeSecureGranted = SecondScreenController.hasWriteSecureSettingsPermission(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -183,6 +210,13 @@ fun PhoneSenderScreen(
                             )
                             Text(
                                 text = "UIBC Cmds: ${sender.uibcEventsExecuted} (${sender.lastRemoteEvent})",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = ElectricCyan
+                            )
+                        }
+                        if (sender.secondScreenNote.isNotEmpty()) {
+                            Text(
+                                text = sender.secondScreenNote,
                                 style = MaterialTheme.typography.labelMedium,
                                 color = ElectricCyan
                             )
@@ -288,6 +322,155 @@ fun PhoneSenderScreen(
                             text = appString(R.string.sender_overlay_btn),
                             onClick = onOpenOverlaySettings,
                             modifier = Modifier.testTag("enable_overlay_button")
+                        )
+                    }
+                }
+            }
+        }
+
+        // SecondScreen Tablet Mode & Resolution/DPI Transformation Card
+        item {
+            TvGlassCard(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.TabletAndroid,
+                        contentDescription = null,
+                        tint = ElectricCyan,
+                        modifier = Modifier.size(26.dp)
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = appString(R.string.sender_secondscreen_title),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = appString(R.string.sender_secondscreen_desc),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextSecondary
+                        )
+                    }
+                }
+
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TvSelectableChip(
+                        label = appString(R.string.sender_ss_off),
+                        selected = uiState.settings.secondScreenProfile == SecondScreenProfile.OFF,
+                        onClick = { onSetSecondScreenProfile(SecondScreenProfile.OFF) },
+                        modifier = Modifier.testTag("ss_profile_off")
+                    )
+                    TvSelectableChip(
+                        label = appString(R.string.sender_ss_tablet_720),
+                        selected = uiState.settings.secondScreenProfile == SecondScreenProfile.TABLET_720P,
+                        onClick = { onSetSecondScreenProfile(SecondScreenProfile.TABLET_720P) },
+                        modifier = Modifier.testTag("ss_profile_720p")
+                    )
+                    TvSelectableChip(
+                        label = appString(R.string.sender_ss_tablet_1080),
+                        selected = uiState.settings.secondScreenProfile == SecondScreenProfile.TABLET_1080P,
+                        onClick = { onSetSecondScreenProfile(SecondScreenProfile.TABLET_1080P) },
+                        modifier = Modifier.testTag("ss_profile_1080p")
+                    )
+                    TvSelectableChip(
+                        label = appString(R.string.sender_ss_smooth),
+                        selected = uiState.settings.secondScreenProfile == SecondScreenProfile.TABLET_SMOOTH,
+                        onClick = { onSetSecondScreenProfile(SecondScreenProfile.TABLET_SMOOTH) },
+                        modifier = Modifier.testTag("ss_profile_smooth")
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = appString(R.string.sender_launch_tablet_grid),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = appString(R.string.sender_launch_tablet_grid_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                    }
+                    Switch(
+                        checked = uiState.settings.launchTabletLauncherOnCast,
+                        onCheckedChange = onSetLaunchTabletLauncher,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = ObsidianBg,
+                            checkedTrackColor = ElectricCyan
+                        ),
+                        modifier = Modifier.testTag("launch_tablet_launcher_switch")
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (writeSettingsGranted) {
+                            appString(R.string.sender_write_settings_ok)
+                        } else {
+                            appString(R.string.sender_write_settings_btn)
+                        },
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (writeSettingsGranted) EmeraldMint else AmberAlert,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (!writeSettingsGranted) {
+                        TvSecondaryButton(
+                            text = appString(R.string.sender_write_settings_btn),
+                            onClick = onOpenWriteSettings,
+                            modifier = Modifier.testTag("enable_write_settings_button")
+                        )
+                    }
+                }
+
+                if (writeSecureGranted) {
+                    Text(
+                        text = appString(R.string.sender_adb_granted),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = EmeraldMint
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(ObsidianCardElevated)
+                            .border(1.dp, ObsidianBorder, RoundedCornerShape(12.dp))
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = appString(R.string.sender_adb_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                        Text(
+                            text = SecondScreenController.adbGrantCommand(context),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = ElectricCyan
+                        )
+                        TvSecondaryButton(
+                            text = if (adbCopied) appString(R.string.sender_adb_copied) else appString(R.string.sender_adb_copy_btn),
+                            onClick = {
+                                clipboard.setText(AnnotatedString(SecondScreenController.adbGrantCommand(context)))
+                                adbCopied = true
+                            },
+                            leadingIcon = { Icon(Icons.Rounded.ContentCopy, contentDescription = null) },
+                            modifier = Modifier.testTag("copy_adb_secondscreen_button")
                         )
                     }
                 }

@@ -124,8 +124,8 @@
     <string name="uibc_client_waiting">Listening on TCP %1$d</string>
 
     <!-- Key Mapping Guide -->
-    <string name="map_dpad">D-Pad Arrows → Navigate Phone or Move Air-Mouse Pointer</string>
-    <string name="map_ok">OK / Center → Select Focused Item or Tap Pointer</string>
+    <string name="map_dpad">D-Pad Arrows → Move TV Focus Ring Across Phone Apps &amp; Buttons (or Move Pointer)</string>
+    <string name="map_ok">OK / Center → Open or Click Highlighted Phone App / Button</string>
     <string name="map_back">Back (Short) → Phone Back  |  Back (Hold) / Menu → TV HUD</string>
     <string name="map_menu">P+ / P- → Scroll Page / Next &amp; Prev Video</string>
     <string name="map_vol">Vol +/- &amp; Mute &amp; Play → Phone Media Audio &amp; Playback</string>
@@ -158,7 +158,7 @@
 
     <!-- Phone Sender Screen -->
     <string name="sender_title">Cast This Phone to TV Box</string>
-    <string name="sender_subtitle">Install MiraBox TV on your Samsung phone to mirror directly over Wi-Fi with Forced Landscape, DeX Mode, and TV Remote Control.</string>
+    <string name="sender_subtitle">Install MiraBox TV on your Samsung phone to mirror directly over Wi-Fi with Forced Landscape, SecondScreen Tablet Mode, and TV Remote Control.</string>
     <string name="sender_discovered_tvs">Discovered MiraBox TV Boxes</string>
     <string name="sender_scanning">Searching Wi-Fi for MiraBox TV Receivers…</string>
     <string name="sender_manual_ip_label">Or Enter TV Box IP Address</string>
@@ -169,18 +169,36 @@
     <string name="sender_status_connecting">Waiting for TV Remote OK Approval…</string>
     <string name="sender_status_streaming">Streaming Live to %1$s</string>
     <string name="sender_accessibility_title">Allow TV Remote to Control Phone Apps</string>
-    <string name="sender_accessibility_desc">Enable MiraBox Remote Accessibility so your TV Box remote D-Pad, OK, P+/-, and Back can control apps on this phone.</string>
+    <string name="sender_accessibility_desc">Enable MiraBox Remote Accessibility so your TV Box remote D-Pad, OK, P+/-, and Back can select and click apps on this phone.</string>
     <string name="sender_accessibility_enabled">Remote Control Accessibility Active</string>
     <string name="sender_accessibility_btn">Enable Remote Control</string>
     <string name="sender_overlay_title">Force Horizontal Landscape on Phone Apps</string>
     <string name="sender_overlay_desc">Allow \"Appear on top\" so MiraBox can automatically flip portrait phone apps into true 16:9 widescreen when TV DeX / Landscape mode is active.</string>
     <string name="sender_overlay_enabled">True Horizontal Landscape Lock Ready</string>
     <string name="sender_overlay_btn">Allow Display Overlay</string>
+    <string name="sender_secondscreen_title">SecondScreen Tablet Mode</string>
+    <string name="sender_secondscreen_desc">Converts this phone into a 16:9 horizontal Tablet layout during mirroring and automatically restores your phone screen when stopped.</string>
+    <string name="sender_ss_off">Phone Native</string>
+    <string name="sender_ss_tablet_720">Tablet 720p (160 DPI)</string>
+    <string name="sender_ss_tablet_1080">Tablet 1080p (213 DPI)</string>
+    <string name="sender_ss_smooth">Smooth 576p</string>
+    <string name="sender_launch_tablet_grid">Open 16:9 Tablet App Launcher on Cast</string>
+    <string name="sender_launch_tablet_grid_desc">Automatically opens a horizontal Tablet desktop grid of your phone apps controllable with TV remote D-Pad &amp; OK.</string>
+    <string name="sender_write_settings_btn">Allow Rotation Lock</string>
+    <string name="sender_write_settings_ok">System Rotation Lock Ready</string>
+    <string name="sender_adb_granted">System Resolution &amp; Tablet DPI Enabled (SecondScreen Pro)</string>
+    <string name="sender_adb_hint">Optional for full system-wide Tablet DPI across Samsung/Chrome: run once from PC via ADB</string>
+    <string name="sender_adb_copy_btn">Copy ADB Command</string>
+    <string name="sender_adb_copied">Copied!</string>
+    <string name="tablet_launcher_title">MiraBox Tablet Desktop (16:9)</string>
+    <string name="tablet_launcher_subtitle">Casting to %1$s • Navigate apps with TV Remote D-Pad &amp; OK</string>
+    <string name="tablet_launcher_subtitle_hd">SecondScreen Active • Streaming to %1$s</string>
+    <string name="tablet_btn_mirabox">MiraBox App</string>
     <string name="sender_audio_active">Internal TV Audio Active (PCM 48kHz)</string>
     <string name="sender_audio_android9_limit">Android 9 blocks internal audio capture (needs Android 10+; pair Bluetooth to TV for sound)</string>
     <string name="sender_audio_perm_missing">Microphone/Audio capture permission not granted</string>
     <string name="accessibility_service_label">MiraBox TV Remote Control</string>
-    <string name="accessibility_service_desc">Forwards TV Box remote D-Pad, OK, Back, P+/-, and Air-Mouse taps from MiraBox TV Receiver onto your mirrored phone apps.</string>
+    <string name="accessibility_service_desc">Draws TV focus highlight and forwards TV Box remote D-Pad, OK, Back, P+/-, and Air-Mouse taps onto your mirrored phone apps.</string>
     <string name="sender_notification_title">MiraBox TV Casting Active</string>
     <string name="sender_notification_text">Mirroring phone screen to %1$s</string>
 </resources>

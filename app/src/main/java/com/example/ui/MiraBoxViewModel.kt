@@ -11,6 +11,7 @@ import com.example.data.DexDpiProfile
 import com.example.data.DisplayMode
 import com.example.data.LandscapeRotation
 import com.example.data.ReceiverSettings
+import com.example.data.SecondScreenProfile
 import com.example.data.SettingsRepository
 import com.example.data.UibcControlMode
 import com.example.miracast.ActiveMirrorSession
@@ -205,8 +206,7 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
                 _latestSettings.value = settings
                 val shouldMouse = when (settings.uibcControlMode) {
                     UibcControlMode.AIR_MOUSE_POINTER -> true
-                    UibcControlMode.DPAD_KEYS -> false
-                    UibcControlMode.HYBRID_AUTO -> settings.displayMode == DisplayMode.DEX_TV_DESKTOP
+                    UibcControlMode.DPAD_KEYS, UibcControlMode.HYBRID_AUTO -> false
                 }
                 _airMouse.update { it.copy(enabled = shouldMouse) }
             }
@@ -311,6 +311,8 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
         rtpVideoReceiver.attachSurface(surface, profile.width, profile.height)
     }
 
+    private var lastDpadRepeatMs: Long = 0L
+
     /**
      * Handles TV Box Remote Control input while on the Mirror Stage.
      * Separates TV HUD navigation from Phone UIBC injection with zero button overlap.
@@ -344,6 +346,7 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
         // Ignore auto-repeat on discrete action keys (prevents accidental double-taps on OK/Back/Home)
         val isDiscreteKey = keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
             keyCode == KeyEvent.KEYCODE_ENTER ||
+            keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER ||
             keyCode == KeyEvent.KEYCODE_BACK ||
             keyCode == KeyEvent.KEYCODE_HOME ||
             keyCode == KeyEvent.KEYCODE_APP_SWITCH ||
@@ -355,12 +358,24 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
             return true
         }
 
+        // Rate-limit held D-Pad repeats so focus moves cleanly item-by-item without flooding
+        if (isDown && repeatCount > 0 && isDirectionalOrOk(keyCode)) {
+            val now = System.currentTimeMillis()
+            if (now - lastDpadRepeatMs < 115L) {
+                return true
+            }
+            lastDpadRepeatMs = now
+        }
+
         val mouse = _airMouse.value
         val step = 0.04f * _latestSettings.value.airMouseSpeed
 
         if (mouse.enabled && isDirectionalOrOk(keyCode)) {
             if (!isDown) {
-                if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+                if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+                    keyCode == KeyEvent.KEYCODE_ENTER ||
+                    keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER
+                ) {
                     uibcServer.sendTouchEvent(1, mouse.normX, mouse.normY, 1920, 1080)
                 }
                 return true
@@ -386,7 +401,9 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
                     _airMouse.update { it.copy(normX = nx) }
                     uibcServer.sendTouchEvent(2, nx, mouse.normY, 1920, 1080)
                 }
-                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                KeyEvent.KEYCODE_DPAD_CENTER,
+                KeyEvent.KEYCODE_ENTER,
+                KeyEvent.KEYCODE_NUMPAD_ENTER -> {
                     uibcServer.sendTouchEvent(0, mouse.normX, mouse.normY, 1920, 1080)
                     handleLoopbackCursorClick(mouse.normX, mouse.normY)
                 }
@@ -394,7 +411,7 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
             return true
         }
 
-        // Standard UIBC Key Injection (D-Pad, OK, P+/P-, Back, Home, Volume, Mute, Play/Pause, 0-9)
+        // Standard UIBC Key Injection (Spatial D-Pad Focus, OK, P+/P-, Back, Home, Volume, Mute, Play/Pause, 0-9)
         uibcServer.sendKeyEvent(keyCode, isDown)
         if (isDown) {
             updateLoopbackDpadState(keyCode)
@@ -478,7 +495,8 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
         KeyEvent.KEYCODE_DPAD_LEFT,
         KeyEvent.KEYCODE_DPAD_RIGHT,
         KeyEvent.KEYCODE_DPAD_CENTER,
-        KeyEvent.KEYCODE_ENTER -> true
+        KeyEvent.KEYCODE_ENTER,
+        KeyEvent.KEYCODE_NUMPAD_ENTER -> true
         else -> false
     }
 
@@ -533,6 +551,14 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
 
     fun setAirMouseSpeed(speed: Float) {
         viewModelScope.launch { settingsRepository.setAirMouseSpeed(speed) }
+    }
+
+    fun setSecondScreenProfile(profile: SecondScreenProfile) {
+        viewModelScope.launch { settingsRepository.setSecondScreenProfile(profile) }
+    }
+
+    fun setLaunchTabletLauncherOnCast(enabled: Boolean) {
+        viewModelScope.launch { settingsRepository.setLaunchTabletLauncherOnCast(enabled) }
     }
 
     fun setLanguage(language: AppLanguage) {

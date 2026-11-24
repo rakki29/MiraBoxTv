@@ -75,6 +75,7 @@ data class SenderRuntimeStatus(
     val audioStreaming: Boolean = false,
     val audioStatusNote: String = "",
     val landscapeLockActive: Boolean = false,
+    val secondScreenNote: String = "",
     val errorMessage: String? = null
 )
 
@@ -113,6 +114,8 @@ class ScreenCastSenderService : Service() {
         const val EXTRA_VIDEO_PORT = "video_port"
         const val EXTRA_AUDIO_PORT = "audio_port"
         const val EXTRA_TARGET_NAME = "target_name"
+        const val EXTRA_SECOND_SCREEN_PROFILE = "second_screen_profile"
+        const val EXTRA_LAUNCH_TABLET_LAUNCHER = "launch_tablet_launcher"
 
         private const val CHANNEL_ID = "mirabox_cast_sender"
         private const val NOTIFICATION_ID = 4102
@@ -166,6 +169,12 @@ class ScreenCastSenderService : Service() {
         val videoPort = intent?.getIntExtra(EXTRA_VIDEO_PORT, 19001) ?: 19001
         val audioPort = intent?.getIntExtra(EXTRA_AUDIO_PORT, 19002) ?: 19002
         val targetName = intent?.getStringExtra(EXTRA_TARGET_NAME) ?: host
+        val secondScreenProfile = runCatching {
+            com.example.data.SecondScreenProfile.valueOf(
+                intent?.getStringExtra(EXTRA_SECOND_SCREEN_PROFILE) ?: ""
+            )
+        }.getOrDefault(com.example.data.SecondScreenProfile.TABLET_720P)
+        val launchTabletLauncher = intent?.getBooleanExtra(EXTRA_LAUNCH_TABLET_LAUNCHER, true) ?: true
 
         if (resultCode != Activity.RESULT_OK || resultData == null || host.isBlank()) {
             stopSelf()
@@ -191,7 +200,9 @@ class ScreenCastSenderService : Service() {
             uibcPort = uibcPort,
             videoPort = videoPort,
             audioPort = audioPort,
-            targetName = targetName
+            targetName = targetName,
+            secondScreenProfile = secondScreenProfile,
+            launchTabletLauncher = launchTabletLauncher
         )
 
         return START_NOT_STICKY
@@ -210,7 +221,9 @@ class ScreenCastSenderService : Service() {
         uibcPort: Int,
         videoPort: Int,
         audioPort: Int,
-        targetName: String
+        targetName: String,
+        secondScreenProfile: com.example.data.SecondScreenProfile,
+        launchTabletLauncher: Boolean
     ) {
         sessionJob?.cancel()
         uibcJob?.cancel()
@@ -313,8 +326,18 @@ class ScreenCastSenderService : Service() {
                     DisplayMode.valueOf(playResp.headers["x-display-mode"] ?: "")
                 }.getOrDefault(DisplayMode.DEX_TV_DESKTOP)
 
-                // Apply True Force Landscape on the phone if TV is in Force Landscape / DeX Mode
-                applyPhoneLandscapeLock(tvDisplayMode != DisplayMode.STANDARD_MIRROR)
+                val forceLandscape = tvDisplayMode != DisplayMode.STANDARD_MIRROR
+
+                // Apply SecondScreen Tablet resolution/DPI (if granted) + system rotation lock + overlay lock
+                val secondScreenRes = SecondScreenController.applySecondScreenProfile(
+                    context = this@ScreenCastSenderService,
+                    profile = secondScreenProfile,
+                    forceLandscape = forceLandscape
+                )
+                applyPhoneLandscapeLock(forceLandscape)
+                if (secondScreenRes.description.isNotEmpty()) {
+                    SenderRuntimeBus.update { it.copy(secondScreenNote = secondScreenRes.description) }
+                }
 
                 // 2. Start UIBC Listener Client to receive TV Remote commands & live DisplayMode updates
                 startUibcReceiver(host, actualUibcPort)
@@ -338,9 +361,9 @@ class ScreenCastSenderService : Service() {
 
                 registerOrientationListener()
 
-                // Give orientation overlay ~150ms to flip display before first capture if active
-                if (tvDisplayMode != DisplayMode.STANDARD_MIRROR && canDrawOverlayPermission()) {
-                    delay(180)
+                // Give orientation overlay / SecondScreen display switch ~250ms to settle before capture
+                if (forceLandscape && (canDrawOverlayPermission() || secondScreenRes.appliedResolutionDpi || secondScreenRes.appliedRotationLock)) {
+                    delay(260)
                 }
 
                 val (curW, curH) = readCurrentScreenDimensions()
@@ -358,8 +381,21 @@ class ScreenCastSenderService : Service() {
                     )
                 }
 
-                // 6. Main H.264 Output Loop with seamless orientation reconfiguration
+                // 6. Launch Tablet/TV App Grid on phone if requested (SecondScreen experience)
+                if (launchTabletLauncher && forceLandscape) {
+                    mainHandler.post {
+                        runCatching {
+                            startActivity(
+                                Intent(this@ScreenCastSenderService, TabletLauncherActivity::class.java)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                            )
+                        }
+                    }
+                }
+
+                // 7. Main H.264 Output Loop with seamless orientation reconfiguration
                 val bufferInfo = MediaCodec.BufferInfo()
+                var sentFrames = 0L
                 while (isActive && !vSocket.isClosed) {
                     val reconfigSize = pendingReconfigureSize
                     if (reconfigSize != null) {
@@ -392,8 +428,12 @@ class ScreenCastSenderService : Service() {
                             videoOut.writeLong(bufferInfo.presentationTimeUs)
                             videoOut.write(frameBytes)
                             videoOut.flush()
-                            SenderRuntimeBus.update { st ->
-                                st.copy(framesStreamed = st.framesStreamed + 1)
+                            sentFrames += 1L
+                            if (sentFrames <= 3L || sentFrames % 30L == 0L) {
+                                val snapshotCount = sentFrames
+                                SenderRuntimeBus.update { st ->
+                                    st.copy(framesStreamed = snapshotCount)
+                                }
                             }
                         }
                         codec.releaseOutputBuffer(outIdx, false)
@@ -452,13 +492,19 @@ class ScreenCastSenderService : Service() {
         )
     }
 
-    private fun checkOrientationChange() {
-        if (mediaProjection == null) return
+    private val debouncedOrientationCheck = Runnable {
+        if (mediaProjection == null) return@Runnable
         val (w, h) = readCurrentScreenDimensions()
         val nowPortrait = h > w
         if (nowPortrait != activeIsPortrait) {
             pendingReconfigureSize = w to h
         }
+    }
+
+    private fun checkOrientationChange() {
+        if (mediaProjection == null) return
+        mainHandler.removeCallbacks(debouncedOrientationCheck)
+        mainHandler.postDelayed(debouncedOrientationCheck, 320L)
     }
 
     private fun registerOrientationListener() {
@@ -665,42 +711,53 @@ class ScreenCastSenderService : Service() {
         )
         var lastException: Exception? = null
         for ((w, h) in candidates) {
-            val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-            try {
-                val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
-                    setInteger(
-                        MediaFormat.KEY_COLOR_FORMAT,
-                        MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
-                    )
-                    setInteger(MediaFormat.KEY_BIT_RATE, 5_000_000)
-                    setInteger(MediaFormat.KEY_FRAME_RATE, 30)
-                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
-                    setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000L)
-                    setInteger(MediaFormat.KEY_PRIORITY, 0)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+            // Try progressively simpler low-latency formats while preserving Baseline Profile (zero B-frames)
+            val attemptBuilders: List<() -> MediaFormat> = listOf(
+                {
+                    MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
+                        setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                        setInteger(MediaFormat.KEY_BIT_RATE, 5_000_000)
+                        setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+                        setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                        setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+                        setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel31)
+                        setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000L)
+                        setInteger(MediaFormat.KEY_PRIORITY, 0)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+                        }
                     }
-                }
-                codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                return Triple(codec, w, h)
-            } catch (_: Exception) {
-                // Retry without optional B-frame/priority keys on older HAL encoders
-                runCatching { codec.reset() }
-                try {
-                    val basic = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
-                        setInteger(
-                            MediaFormat.KEY_COLOR_FORMAT,
-                            MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
-                        )
+                },
+                {
+                    MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
+                        setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                         setInteger(MediaFormat.KEY_BIT_RATE, 4_500_000)
                         setInteger(MediaFormat.KEY_FRAME_RATE, 30)
-                        setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+                        setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                        setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+                        setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000L)
                     }
-                    codec.configure(basic, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                },
+                {
+                    MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
+                        setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                        setInteger(MediaFormat.KEY_BIT_RATE, 4_000_000)
+                        setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+                        setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+                        }
+                    }
+                }
+            )
+            for (buildFormat in attemptBuilders) {
+                val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                try {
+                    codec.configure(buildFormat(), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                     return Triple(codec, w, h)
-                } catch (e2: Exception) {
+                } catch (e: Exception) {
                     runCatching { codec.release() }
-                    lastException = e2
+                    lastException = e
                 }
             }
         }
@@ -739,7 +796,7 @@ class ScreenCastSenderService : Service() {
                                     }
                                 }
                             }
-                            0 -> { // TouchDown (Air-Mouse tap)
+                            0, 2 -> { // TouchDown (0) or Cursor Move (2)
                                 if (body.size >= 9) {
                                     val px = ((body[5].toInt() and 0xFF) shl 8) or
                                         (body[6].toInt() and 0xFF)
@@ -747,12 +804,16 @@ class ScreenCastSenderService : Service() {
                                         (body[8].toInt() and 0xFF)
                                     val normX = (px.toFloat() / 1920f).coerceIn(0f, 1f)
                                     val normY = (py.toFloat() / 1080f).coerceIn(0f, 1f)
-                                    acc?.executeRemoteTap(normX, normY)
-                                    SenderRuntimeBus.update {
-                                        it.copy(
-                                            uibcEventsExecuted = it.uibcEventsExecuted + 1,
-                                            lastRemoteEvent = "TAP ($px, $py)"
-                                        )
+                                    if (ieId == 0) {
+                                        acc?.executeRemoteTap(normX, normY)
+                                        SenderRuntimeBus.update {
+                                            it.copy(
+                                                uibcEventsExecuted = it.uibcEventsExecuted + 1,
+                                                lastRemoteEvent = "TAP ($px, $py)"
+                                            )
+                                        }
+                                    } else {
+                                        acc?.updateRemoteCursor(normX, normY)
                                     }
                                 }
                             }
@@ -817,7 +878,9 @@ class ScreenCastSenderService : Service() {
     }
 
     private fun cleanupResources() {
+        mainHandler.removeCallbacks(debouncedOrientationCheck)
         applyPhoneLandscapeLock(false)
+        SecondScreenController.restoreOriginalDisplay(this)
         displayListener?.let { listener ->
             runCatching { displayManager?.unregisterDisplayListener(listener) }
         }

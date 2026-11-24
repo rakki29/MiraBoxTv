@@ -218,7 +218,9 @@ class UibcServer(private val scope: CoroutineScope) {
         KeyEvent.KEYCODE_DPAD_DOWN -> 0x0051
         KeyEvent.KEYCODE_DPAD_LEFT -> 0x0050
         KeyEvent.KEYCODE_DPAD_RIGHT -> 0x004F
-        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> 0x0028
+        KeyEvent.KEYCODE_DPAD_CENTER,
+        KeyEvent.KEYCODE_ENTER,
+        KeyEvent.KEYCODE_NUMPAD_ENTER -> 0x0028
         KeyEvent.KEYCODE_BACK -> 0x0029
         KeyEvent.KEYCODE_HOME -> 0x004A
         KeyEvent.KEYCODE_APP_SWITCH -> 0x0076
@@ -250,7 +252,9 @@ class UibcServer(private val scope: CoroutineScope) {
         KeyEvent.KEYCODE_DPAD_DOWN -> "DPAD_DOWN"
         KeyEvent.KEYCODE_DPAD_LEFT -> "DPAD_LEFT"
         KeyEvent.KEYCODE_DPAD_RIGHT -> "DPAD_RIGHT"
-        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> "OK"
+        KeyEvent.KEYCODE_DPAD_CENTER,
+        KeyEvent.KEYCODE_ENTER,
+        KeyEvent.KEYCODE_NUMPAD_ENTER -> "OK"
         KeyEvent.KEYCODE_BACK -> "BACK"
         KeyEvent.KEYCODE_HOME -> "HOME"
         KeyEvent.KEYCODE_APP_SWITCH -> "RECENTS"

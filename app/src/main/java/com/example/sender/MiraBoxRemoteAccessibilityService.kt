@@ -2,16 +2,28 @@ package com.example.sender
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.graphics.Color
 import android.graphics.Path
+import android.graphics.PixelFormat
+import android.graphics.Rect
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.util.DisplayMetrics
+import android.view.Gravity
+import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import kotlin.math.abs
 
 /**
- * Optional user-enabled AccessibilityService on the Phone Sender side.
- * Translates UIBC Remote Control commands received from the TV Box (Back, Home, Recents,
- * P+/P-, D-Pad focus/scroll, OK click, and Air-Mouse screen taps) into real system gestures.
+ * AccessibilityService on the Phone Sender side that gives TV Box Remote Control
+ * genuine Android TV-style D-Pad item-by-item navigation across phone apps and launchers,
+ * draws a real-time Cyan TV Selection Highlight Ring over the focused app/button,
+ * executes OK clicks reliably (ACTION_CLICK + exact coordinate tap fallback),
+ * handles P+/P- scrolling, and renders the Air-Mouse pointer when enabled.
  */
 class MiraBoxRemoteAccessibilityService : AccessibilityService() {
 
@@ -23,57 +35,550 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         fun isEnabled(): Boolean = instance != null
     }
 
+    private enum class NavDir { UP, DOWN, LEFT, RIGHT }
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var focusHighlightView: View? = null
+    private var cursorView: View? = null
+    private var selectedBounds: Rect? = null
+    private var activeWindowId: Int = -1
+
+    private val hideFocusRunnable = Runnable { hideFocusHighlight() }
+    private val hideCursorRunnable = Runnable { hideCursorOverlay() }
+
+    private data class InteractiveCandidate(
+        val bounds: Rect,
+        val isClickable: Boolean,
+        val area: Long
+    )
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null) return
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val wid = event.windowId
+            if (wid != activeWindowId) {
+                activeWindowId = wid
+                selectedBounds = null
+                mainHandler.post { hideFocusHighlight() }
+            }
+        }
+    }
 
-    override fun onInterrupt() = Unit
+    override fun onInterrupt() {
+        mainHandler.post {
+            hideFocusHighlight()
+            hideCursorOverlay()
+        }
+    }
 
     override fun onDestroy() {
         if (instance === this) instance = null
+        mainHandler.removeCallbacksAndMessages(null)
+        mainHandler.post {
+            hideFocusHighlight()
+            hideCursorOverlay()
+        }
         super.onDestroy()
+    }
+
+    fun updateRemoteCursor(normX: Float, normY: Float) {
+        mainHandler.post {
+            val (screenW, screenH) = getScreenBounds()
+            val px = (normX.coerceIn(0.02f, 0.98f) * screenW).toInt()
+            val py = (normY.coerceIn(0.02f, 0.98f) * screenH).toInt()
+            showCursorOverlay(px, py)
+        }
     }
 
     fun executeRemoteTap(normX: Float, normY: Float) {
         val (screenW, screenH) = getScreenBounds()
         val x = (normX.coerceIn(0.02f, 0.98f) * screenW)
         val y = (normY.coerceIn(0.02f, 0.98f) * screenH)
-        val path = Path().apply { moveTo(x, y) }
-        val stroke = GestureDescription.StrokeDescription(path, 0L, 55L)
-        dispatchGesture(
-            GestureDescription.Builder().addStroke(stroke).build(),
-            null,
-            null
-        )
+        mainHandler.post { showCursorOverlay(x.toInt(), y.toInt()) }
+        dispatchTapAt(x, y)
     }
 
     fun executeRemoteKey(hidKeyCode: Int) {
         when (hidKeyCode) {
-            0x0029 -> performGlobalAction(GLOBAL_ACTION_BACK)
-            0x004A -> performGlobalAction(GLOBAL_ACTION_HOME)
-            0x0076 -> performGlobalAction(GLOBAL_ACTION_RECENTS)
-            0x0028 -> {
-                // Click accessibility/input-focused item if available, otherwise center tap
-                val root = runCatching { rootInActiveWindow }.getOrNull()
-                val focused = root?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-                    ?: root?.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
-                val clicked = focused?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
-                if (!clicked) {
-                    executeRemoteTap(0.5f, 0.5f)
+            0x0029 -> {
+                selectedBounds = null
+                mainHandler.post { hideFocusHighlight() }
+                performGlobalAction(GLOBAL_ACTION_BACK)
+            }
+            0x004A -> {
+                selectedBounds = null
+                mainHandler.post { hideFocusHighlight() }
+                performGlobalAction(GLOBAL_ACTION_HOME)
+            }
+            0x0076 -> {
+                selectedBounds = null
+                mainHandler.post { hideFocusHighlight() }
+                performGlobalAction(GLOBAL_ACTION_RECENTS)
+            }
+            0x0028 -> mainHandler.post { performSpatialOkClick() }
+            0x0052 -> mainHandler.post { moveSpatialFocus(NavDir.UP) }
+            0x0051 -> mainHandler.post { moveSpatialFocus(NavDir.DOWN) }
+            0x0050 -> mainHandler.post { moveSpatialFocus(NavDir.LEFT) }
+            0x004F -> mainHandler.post { moveSpatialFocus(NavDir.RIGHT) }
+            0x004B -> mainHandler.post { performPageScroll(forward = true) }  // P+
+            0x004E -> mainHandler.post { performPageScroll(forward = false) } // P-
+        }
+    }
+
+    private fun moveSpatialFocus(dir: NavDir) {
+        val root = runCatching { rootInActiveWindow }.getOrNull() ?: return
+        val (screenW, screenH) = getScreenBounds()
+        val candidates = collectInteractiveCandidates(root, screenW.toInt(), screenH.toInt())
+
+        if (candidates.isEmpty()) {
+            // Fallback for custom OpenGL/video-only screens
+            when (dir) {
+                NavDir.UP -> performSwipe(0.5f, 0.60f, 0.5f, 0.38f, 150L)
+                NavDir.DOWN -> performSwipe(0.5f, 0.38f, 0.5f, 0.60f, 150L)
+                NavDir.LEFT -> performSwipe(0.66f, 0.5f, 0.34f, 0.5f, 150L)
+                NavDir.RIGHT -> performSwipe(0.34f, 0.5f, 0.66f, 0.5f, 150L)
+            }
+            @Suppress("DEPRECATION")
+            runCatching { root.recycle() }
+            return
+        }
+
+        val current = selectedBounds ?: findCurrentlyFocusedRect(root)
+        val chosen = if (current == null) {
+            pickInitialCandidate(candidates, dir)
+        } else {
+            findBestNeighbor(current, candidates, dir)
+        }
+
+        if (chosen != null) {
+            selectCandidateRect(root, chosen.bounds)
+            @Suppress("DEPRECATION")
+            runCatching { root.recycle() }
+            return
+        }
+
+        // Reached the edge in that direction — try scrolling a scrollable container cleanly
+        val forward = (dir == NavDir.DOWN || dir == NavDir.RIGHT)
+        val scrolled = tryScrollActiveContainer(root, forward)
+        @Suppress("DEPRECATION")
+        runCatching { root.recycle() }
+
+        if (scrolled) {
+            mainHandler.postDelayed({
+                val freshRoot = runCatching { rootInActiveWindow }.getOrNull() ?: return@postDelayed
+                val freshCandidates = collectInteractiveCandidates(freshRoot, screenW.toInt(), screenH.toInt())
+                val afterScroll = if (current != null) {
+                    findBestNeighbor(current, freshCandidates, dir)
+                        ?: pickEdgeCandidateAfterScroll(freshCandidates, dir)
+                } else {
+                    pickEdgeCandidateAfterScroll(freshCandidates, dir)
+                }
+                if (afterScroll != null) {
+                    selectCandidateRect(freshRoot, afterScroll.bounds)
+                }
+                @Suppress("DEPRECATION")
+                runCatching { freshRoot.recycle() }
+            }, 220L)
+        }
+    }
+
+    private fun performSpatialOkClick() {
+        val root = runCatching { rootInActiveWindow }.getOrNull()
+        val rect = selectedBounds ?: root?.let { findCurrentlyFocusedRect(it) }
+
+        if (root != null && rect != null) {
+            val targetNode = findNodeMatchingRect(root, rect)
+            val clickedViaAccessibility = targetNode?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+            if (targetNode != null && targetNode !== root) {
+                @Suppress("DEPRECATION")
+                runCatching { targetNode.recycle() }
+            }
+            @Suppress("DEPRECATION")
+            runCatching { root.recycle() }
+
+            if (!clickedViaAccessibility) {
+                dispatchTapAt(rect.exactCenterX(), rect.exactCenterY())
+            }
+            showFocusHighlight(rect)
+            return
+        }
+
+        if (root != null) {
+            val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+            val clicked = focused?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+            if (focused != null && focused !== root) {
+                @Suppress("DEPRECATION")
+                runCatching { focused.recycle() }
+            }
+            if (clicked) {
+                @Suppress("DEPRECATION")
+                runCatching { root.recycle() }
+                return
+            }
+
+            // If nothing was selected yet, select first interactive item and click it
+            val (screenW, screenH) = getScreenBounds()
+            val candidates = collectInteractiveCandidates(root, screenW.toInt(), screenH.toInt())
+            val first = candidates.firstOrNull()
+            @Suppress("DEPRECATION")
+            runCatching { root.recycle() }
+            if (first != null) {
+                selectedBounds = first.bounds
+                showFocusHighlight(first.bounds)
+                dispatchTapAt(first.bounds.exactCenterX(), first.bounds.exactCenterY())
+                return
+            }
+        }
+
+        // Last resort tap screen center
+        val (w, h) = getScreenBounds()
+        dispatchTapAt(w * 0.5f, h * 0.5f)
+    }
+
+    private fun performPageScroll(forward: Boolean) {
+        val root = runCatching { rootInActiveWindow }.getOrNull()
+        val scrolled = if (root != null) {
+            val res = tryScrollActiveContainer(root, forward)
+            @Suppress("DEPRECATION")
+            runCatching { root.recycle() }
+            res
+        } else {
+            false
+        }
+
+        if (!scrolled) {
+            if (forward) {
+                performSwipe(0.5f, 0.74f, 0.5f, 0.24f, 220L)
+            } else {
+                performSwipe(0.5f, 0.24f, 0.5f, 0.74f, 220L)
+            }
+        } else {
+            selectedBounds = null
+            hideFocusHighlight()
+        }
+    }
+
+    private fun collectInteractiveCandidates(
+        root: AccessibilityNodeInfo,
+        screenW: Int,
+        screenH: Int
+    ): List<InteractiveCandidate> {
+        val screenArea = (screenW.toLong() * screenH.toLong()).coerceAtLeast(1L)
+        val raw = mutableListOf<InteractiveCandidate>()
+
+        fun dfs(node: AccessibilityNodeInfo) {
+            if (!node.isVisibleToUser) return
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            val w = rect.width()
+            val h = rect.height()
+            val inBounds = rect.right > 0 && rect.bottom > 0 && rect.left < screenW && rect.top < screenH
+            if (!inBounds || w < 18 || h < 18) return
+
+            val clamped = Rect(
+                rect.left.coerceIn(0, screenW),
+                rect.top.coerceIn(0, screenH),
+                rect.right.coerceIn(0, screenW),
+                rect.bottom.coerceIn(0, screenH)
+            )
+            val area = clamped.width().toLong() * clamped.height().toLong()
+            val hasClickAction = node.actionList.any {
+                it.id == AccessibilityNodeInfo.ACTION_CLICK
+            }
+            val interactive = node.isClickable || node.isFocusable || node.isCheckable || hasClickAction
+
+            val childCount = node.childCount
+            val beforeChildrenSize = raw.size
+            for (i in 0 until childCount) {
+                val child = node.getChild(i) ?: continue
+                dfs(child)
+                @Suppress("DEPRECATION")
+                runCatching { child.recycle() }
+            }
+            val addedInteractiveChild = raw.size > beforeChildrenSize
+
+            // Avoid full-screen background/recycler containers stealing selection from their child buttons
+            val notHugeContainer = area < (screenArea * 0.45f).toLong()
+            if (interactive && notHugeContainer && (!addedInteractiveChild || area < (screenArea * 0.14f).toLong())) {
+                raw.add(InteractiveCandidate(clamped, node.isClickable || hasClickAction, area))
+            }
+        }
+
+        dfs(root)
+
+        // Deduplicate near-identical overlapping bounds, keeping the clickable / tighter match
+        val deduped = mutableListOf<InteractiveCandidate>()
+        for (c in raw.sortedBy { it.area }) {
+            val dup = deduped.any { existing ->
+                abs(existing.bounds.centerX() - c.bounds.centerX()) < 14 &&
+                    abs(existing.bounds.centerY() - c.bounds.centerY()) < 14
+            }
+            if (!dup) deduped.add(c)
+        }
+        return deduped
+    }
+
+    private fun findBestNeighbor(
+        current: Rect,
+        candidates: List<InteractiveCandidate>,
+        dir: NavDir
+    ): InteractiveCandidate? {
+        val cx = current.exactCenterX()
+        val cy = current.exactCenterY()
+        var best: InteractiveCandidate? = null
+        var bestScore = Float.MAX_VALUE
+
+        for (cand in candidates) {
+            if (cand.bounds == current) continue
+            val nx = cand.bounds.exactCenterX()
+            val ny = cand.bounds.exactCenterY()
+            val dx = nx - cx
+            val dy = ny - cy
+
+            val validDirection = when (dir) {
+                NavDir.RIGHT -> dx > 12f
+                NavDir.LEFT -> dx < -12f
+                NavDir.DOWN -> dy > 12f
+                NavDir.UP -> dy < -12f
+            }
+            if (!validDirection) continue
+
+            val (major, minor) = when (dir) {
+                NavDir.RIGHT, NavDir.LEFT -> abs(dx) to abs(dy)
+                NavDir.DOWN, NavDir.UP -> abs(dy) to abs(dx)
+            }
+            val score = major + (3.6f * minor)
+            if (score < bestScore) {
+                bestScore = score
+                best = cand
+            }
+        }
+        return best
+    }
+
+    private fun pickInitialCandidate(
+        candidates: List<InteractiveCandidate>,
+        dir: NavDir
+    ): InteractiveCandidate? {
+        return when (dir) {
+            NavDir.UP -> candidates.maxByOrNull { it.bounds.centerY() }
+            NavDir.LEFT -> candidates.maxByOrNull { it.bounds.centerX() }
+            NavDir.DOWN, NavDir.RIGHT -> candidates.minByOrNull {
+                it.bounds.top * 2 + it.bounds.left
+            }
+        }
+    }
+
+    private fun pickEdgeCandidateAfterScroll(
+        candidates: List<InteractiveCandidate>,
+        dir: NavDir
+    ): InteractiveCandidate? {
+        return when (dir) {
+            NavDir.DOWN -> candidates.maxByOrNull { it.bounds.centerY() }
+            NavDir.UP -> candidates.minByOrNull { it.bounds.centerY() }
+            NavDir.RIGHT -> candidates.maxByOrNull { it.bounds.centerX() }
+            NavDir.LEFT -> candidates.minByOrNull { it.bounds.centerX() }
+        }
+    }
+
+    private fun selectCandidateRect(root: AccessibilityNodeInfo, bounds: Rect) {
+        selectedBounds = Rect(bounds)
+        val node = findNodeMatchingRect(root, bounds)
+        if (node != null) {
+            node.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
+            if (node.isFocusable) {
+                node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            }
+            if (node !== root) {
+                @Suppress("DEPRECATION")
+                runCatching { node.recycle() }
+            }
+        }
+        showFocusHighlight(bounds)
+    }
+
+    private fun findCurrentlyFocusedRect(root: AccessibilityNodeInfo): Rect? {
+        val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+            ?: root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?: return null
+        val rect = Rect()
+        focused.getBoundsInScreen(rect)
+        if (focused !== root) {
+            @Suppress("DEPRECATION")
+            runCatching { focused.recycle() }
+        }
+        return if (rect.width() > 0 && rect.height() > 0) rect else null
+    }
+
+    private fun findNodeMatchingRect(root: AccessibilityNodeInfo, target: Rect): AccessibilityNodeInfo? {
+        val rect = Rect()
+        root.getBoundsInScreen(rect)
+        if (rect == target && (root.isClickable || root.isFocusable || root.isCheckable)) {
+            return root
+        }
+        for (i in 0 until root.childCount) {
+            val child = root.getChild(i) ?: continue
+            val match = findNodeMatchingRect(child, target)
+            if (match != null) {
+                if (match !== child) {
+                    @Suppress("DEPRECATION")
+                    runCatching { child.recycle() }
+                }
+                return match
+            }
+            @Suppress("DEPRECATION")
+            runCatching { child.recycle() }
+        }
+        if (rect == target) return root
+        return null
+    }
+
+    private fun tryScrollActiveContainer(root: AccessibilityNodeInfo, forward: Boolean): Boolean {
+        val action = if (forward) {
+            AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+        } else {
+            AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        }
+
+        fun dfs(node: AccessibilityNodeInfo): Boolean {
+            if (node.isVisibleToUser && node.isScrollable) {
+                if (node.performAction(action)) return true
+            }
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                val ok = dfs(child)
+                @Suppress("DEPRECATION")
+                runCatching { child.recycle() }
+                if (ok) return true
+            }
+            return false
+        }
+        return dfs(root)
+    }
+
+    private fun showFocusHighlight(bounds: Rect) {
+        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+        } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_SYSTEM_OVERLAY
+        }
+
+        val pad = 6
+        val left = (bounds.left - pad).coerceAtLeast(0)
+        val top = (bounds.top - pad).coerceAtLeast(0)
+        val width = (bounds.width() + pad * 2).coerceAtLeast(36)
+        val height = (bounds.height() + pad * 2).coerceAtLeast(36)
+
+        val params = WindowManager.LayoutParams(
+            width,
+            height,
+            left,
+            top,
+            overlayType,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+        }
+
+        val existing = focusHighlightView
+        if (existing == null) {
+            val ring = View(this).apply {
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    cornerRadius = 20f
+                    setColor(Color.argb(38, 0, 229, 255))
+                    setStroke(6, Color.rgb(0, 229, 255))
                 }
             }
-            // Safe-zone D-Pad swipes (stay well inside 0.25..0.75 to avoid Android edge-back gesture)
-            0x0052 -> performSwipe(0.5f, 0.62f, 0.5f, 0.38f, 160L) // DPAD_UP
-            0x0051 -> performSwipe(0.5f, 0.38f, 0.5f, 0.62f, 160L) // DPAD_DOWN
-            0x0050 -> performSwipe(0.68f, 0.5f, 0.32f, 0.5f, 160L) // DPAD_LEFT
-            0x004F -> performSwipe(0.32f, 0.5f, 0.68f, 0.5f, 160L) // DPAD_RIGHT
-            // P+ / P- (Channel / Page Up & Down) -> smooth full-page / feed scroll
-            0x004B -> performSwipe(0.5f, 0.74f, 0.5f, 0.24f, 220L) // P+
-            0x004E -> performSwipe(0.5f, 0.24f, 0.5f, 0.74f, 220L) // P-
+            runCatching {
+                wm.addView(ring, params)
+                focusHighlightView = ring
+            }
+        } else {
+            runCatching { wm.updateViewLayout(existing, params) }
         }
+
+        mainHandler.removeCallbacks(hideFocusRunnable)
+        mainHandler.postDelayed(hideFocusRunnable, 5000L)
+    }
+
+    private fun hideFocusHighlight() {
+        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        focusHighlightView?.let { v ->
+            runCatching { wm.removeView(v) }
+        }
+        focusHighlightView = null
+    }
+
+    private fun showCursorOverlay(px: Int, py: Int) {
+        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+        } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_SYSTEM_OVERLAY
+        }
+        val sizePx = 38
+        val params = WindowManager.LayoutParams(
+            sizePx,
+            sizePx,
+            (px - sizePx / 2).coerceAtLeast(0),
+            (py - sizePx / 2).coerceAtLeast(0),
+            overlayType,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+        }
+
+        val existing = cursorView
+        if (existing == null) {
+            val dot = View(this).apply {
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.argb(120, 0, 229, 255))
+                    setStroke(5, Color.WHITE)
+                }
+            }
+            runCatching {
+                wm.addView(dot, params)
+                cursorView = dot
+            }
+        } else {
+            runCatching { wm.updateViewLayout(existing, params) }
+        }
+
+        mainHandler.removeCallbacks(hideCursorRunnable)
+        mainHandler.postDelayed(hideCursorRunnable, 4000L)
+    }
+
+    private fun hideCursorOverlay() {
+        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        cursorView?.let { v ->
+            runCatching { wm.removeView(v) }
+        }
+        cursorView = null
+    }
+
+    private fun dispatchTapAt(x: Float, y: Float) {
+        val path = Path().apply { moveTo(x, y) }
+        val stroke = GestureDescription.StrokeDescription(path, 0L, 50L)
+        dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
     }
 
     private fun performSwipe(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long) {
@@ -86,14 +591,15 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
     }
 
+    @Suppress("DEPRECATION")
     private fun getScreenBounds(): Pair<Float, Float> {
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val bounds = wm.currentWindowMetrics.bounds
             bounds.width().toFloat() to bounds.height().toFloat()
         } else {
-            @Suppress("DEPRECATION")
-            val dm = resources.displayMetrics
+            val dm = DisplayMetrics()
+            wm.defaultDisplay.getRealMetrics(dm)
             dm.widthPixels.toFloat() to dm.heightPixels.toFloat()
         }
     }

@@ -37,6 +37,9 @@ class MiracastProtocolTest {
         val client = Socket("127.0.0.1", port)
         delay(100)
         uibc.sendKeyEvent(KeyEvent.KEYCODE_DPAD_CENTER, true)
+        uibc.sendKeyEvent(KeyEvent.KEYCODE_NUMPAD_ENTER, true)
+        uibc.sendKeyEvent(KeyEvent.KEYCODE_DPAD_LEFT, true)
+        uibc.sendKeyEvent(KeyEvent.KEYCODE_DPAD_RIGHT, true)
         uibc.sendKeyEvent(KeyEvent.KEYCODE_CHANNEL_UP, true)
         uibc.sendKeyEvent(KeyEvent.KEYCODE_CHANNEL_DOWN, true)
         uibc.sendKeyEvent(KeyEvent.KEYCODE_VOLUME_MUTE, true)
@@ -45,7 +48,7 @@ class MiracastProtocolTest {
         delay(150)
 
         val telemetry = uibc.telemetry.value
-        assertTrue(telemetry.packetsSent >= 6)
+        assertTrue(telemetry.packetsSent >= 9)
         assertTrue(telemetry.lastPacketSummary.contains("FORCE_LANDSCAPE"))
         assertTrue(telemetry.lastPacketHex.isNotEmpty())
 

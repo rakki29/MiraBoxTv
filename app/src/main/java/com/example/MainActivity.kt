@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -131,14 +132,15 @@ class MainActivity : ComponentActivity() {
                         putExtra(ScreenCastSenderService.EXTRA_RTSP_PORT, target.rtspPort)
                         putExtra(ScreenCastSenderService.EXTRA_UIBC_PORT, target.uibcPort)
                         putExtra(ScreenCastSenderService.EXTRA_VIDEO_PORT, target.videoPort)
+                        putExtra(ScreenCastSenderService.EXTRA_AUDIO_PORT, 19002)
                         putExtra(ScreenCastSenderService.EXTRA_TARGET_NAME, target.targetName)
                     }
                     ContextCompat.startForegroundService(context, intent)
                 }
             }
 
-            val notificationPermLauncher = rememberLauncherForActivityResult(
-                contract = ActivityResultContracts.RequestPermission()
+            val castPermLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.RequestMultiplePermissions()
             ) {
                 val mpm = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                 projectionLauncher.launch(mpm.createScreenCaptureIntent())
@@ -155,8 +157,16 @@ class MainActivity : ComponentActivity() {
 
             val startPhoneCast: (String, Int, Int, Int, String) -> Unit = { host, rtsp, uibc, video, name ->
                 pendingCastTarget = PendingCastTarget(host, rtsp, uibc, video, name)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    notificationPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                val permsNeeded = buildList {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        add(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        add(Manifest.permission.RECORD_AUDIO)
+                    }
+                }
+                if (permsNeeded.isNotEmpty()) {
+                    castPermLauncher.launch(permsNeeded.toTypedArray())
                 } else {
                     val mpm = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                     projectionLauncher.launch(mpm.createScreenCaptureIntent())
@@ -192,6 +202,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            val openOverlaySettings: () -> Unit = {
+                runCatching {
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:${context.packageName}")
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                }
+            }
+
             MiraBoxTheme {
                 LocalizedEnvironment(language = uiState.settings.language) {
                     MiraBoxAppShell(
@@ -201,7 +221,8 @@ class MainActivity : ComponentActivity() {
                         onOpenSystemCastSettings = openSystemCastSettings,
                         onStartPhoneCast = startPhoneCast,
                         onStopPhoneCast = stopPhoneCast,
-                        onOpenAccessibilitySettings = openAccessibilitySettings
+                        onOpenAccessibilitySettings = openAccessibilitySettings,
+                        onOpenOverlaySettings = openOverlaySettings
                     )
                 }
             }
@@ -217,7 +238,8 @@ private fun MiraBoxAppShell(
     onOpenSystemCastSettings: () -> Unit,
     onStartPhoneCast: (String, Int, Int, Int, String) -> Unit,
     onStopPhoneCast: () -> Unit,
-    onOpenAccessibilitySettings: () -> Unit
+    onOpenAccessibilitySettings: () -> Unit,
+    onOpenOverlaySettings: () -> Unit
 ) {
     val isFullscreenStage =
         uiState.currentDestination == AppDestination.STAGE && uiState.activeSession != null
@@ -354,6 +376,7 @@ private fun MiraBoxAppShell(
                             onStartPhoneCast = onStartPhoneCast,
                             onStopPhoneCast = onStopPhoneCast,
                             onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                            onOpenOverlaySettings = onOpenOverlaySettings,
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight()
@@ -434,6 +457,7 @@ private fun MiraBoxAppShell(
                             onStartPhoneCast = onStartPhoneCast,
                             onStopPhoneCast = onStopPhoneCast,
                             onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                            onOpenOverlaySettings = onOpenOverlaySettings,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(innerPadding)
@@ -466,6 +490,7 @@ private fun DestinationContent(
     onStartPhoneCast: (String, Int, Int, Int, String) -> Unit,
     onStopPhoneCast: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onOpenOverlaySettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     when (uiState.currentDestination) {
@@ -524,6 +549,7 @@ private fun DestinationContent(
             onStartCast = onStartPhoneCast,
             onStopCast = onStopPhoneCast,
             onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+            onOpenOverlaySettings = onOpenOverlaySettings,
             modifier = modifier
         )
     }

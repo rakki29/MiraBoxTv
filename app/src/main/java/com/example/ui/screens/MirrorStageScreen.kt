@@ -12,6 +12,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -58,8 +59,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -96,11 +101,12 @@ import kotlin.math.roundToInt
  * Attaches a hardware TextureView to MediaCodec H.264 stream with real-time Matrix rotation
  * (Forced Landscape 16:9), Android TV / Samsung DeX taskbar shell, and UIBC remote/Air-Mouse forwarding.
  */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun MirrorStageScreen(
     uiState: MiraBoxUiState,
     onAttachSurface: (Surface?) -> Unit,
-    onRemoteKey: (Int, Boolean) -> Boolean,
+    onRemoteKey: (Int, Boolean, Int) -> Boolean,
     onToggleHud: (Boolean?) -> Unit,
     onSetDisplayMode: (DisplayMode) -> Unit,
     onRotateCycle: () -> Unit,
@@ -110,7 +116,21 @@ fun MirrorStageScreen(
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    BackHandler {
+    val session = uiState.activeSession
+    val settings = uiState.settings
+    val isDeX = settings.displayMode == DisplayMode.DEX_TV_DESKTOP
+    val isForcedLandscape = settings.displayMode == DisplayMode.FORCE_LANDSCAPE
+    val stageFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(session != null, uiState.stageHudVisible) {
+        if (session != null && !uiState.stageHudVisible) {
+            runCatching { stageFocusRequester.requestFocus() }
+        }
+    }
+
+    // Only intercept system BackHandler when session is null or HUD is open;
+    // when HUD is closed during an active session, short BACK forwards directly to the phone!
+    BackHandler(enabled = session == null || uiState.stageHudVisible) {
         if (uiState.stageHudVisible) {
             onToggleHud(false)
         } else {
@@ -118,20 +138,17 @@ fun MirrorStageScreen(
         }
     }
 
-    val session = uiState.activeSession
-    val settings = uiState.settings
-    val isDeX = settings.displayMode == DisplayMode.DEX_TV_DESKTOP
-    val isForcedLandscape = settings.displayMode == DisplayMode.FORCE_LANDSCAPE
-
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Black)
+            .focusRequester(stageFocusRequester)
+            .focusable()
             .onPreviewKeyEvent { ev ->
                 val isDown = ev.type == KeyEventType.KeyDown
                 val isUp = ev.type == KeyEventType.KeyUp
                 if ((isDown || isUp) && session != null) {
-                    onRemoteKey(ev.nativeKeyEvent.keyCode, isDown)
+                    onRemoteKey(ev.nativeKeyEvent.keyCode, isDown, ev.nativeKeyEvent.repeatCount)
                 } else {
                     false
                 }
@@ -140,7 +157,7 @@ fun MirrorStageScreen(
         val stageW = constraints.maxWidth.toFloat()
         val stageH = constraints.maxHeight.toFloat()
 
-        // 1. Real Hardware MediaCodec Video Surface (TextureView with Forced Landscape Matrix)
+        // 1. Real Hardware MediaCodec Video Surface (TextureView with Upright Landscape Matrix)
         if (session != null && !session.isLoopbackDiagnostic) {
             val streamW = uiState.streamResolution?.first ?: session.sourceWidth
             val streamH = uiState.streamResolution?.second ?: session.sourceHeight
@@ -185,7 +202,7 @@ fun MirrorStageScreen(
                         color = TextPrimary
                     )
                     Text(
-                        text = "TCP ${session.tcpVideoPort} • UIBC ${session.uibcPort}",
+                        text = "Video ${session.tcpVideoPort} • Audio ${session.tcpAudioPort} • UIBC ${session.uibcPort}",
                         style = MaterialTheme.typography.labelLarge,
                         color = ElectricCyan
                     )
@@ -193,15 +210,17 @@ fun MirrorStageScreen(
             }
         }
 
-        // 3. Android TV / Samsung DeX Desktop Taskbar Overlay
+        // 3. Android TV / Samsung DeX Desktop Taskbar Overlay (non-focusable when HUD is closed to prevent D-Pad hijacking)
         if (session != null && isDeX && settings.dexTaskbarEnabled) {
             DeXTaskbarOverlay(
                 uiState = uiState,
                 onToggleAirMouse = onToggleAirMouse,
                 onOpenHud = { onToggleHud(true) },
-                onBackKey = { onRemoteKey(android.view.KeyEvent.KEYCODE_BACK, true) },
-                onHomeKey = { onRemoteKey(android.view.KeyEvent.KEYCODE_HOME, true) },
-                modifier = Modifier.align(Alignment.BottomCenter)
+                onBackKey = { onRemoteKey(android.view.KeyEvent.KEYCODE_BACK, true, 0) },
+                onHomeKey = { onRemoteKey(android.view.KeyEvent.KEYCODE_HOME, true, 0) },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .focusProperties { canFocus = false }
             )
         }
 
@@ -263,12 +282,14 @@ fun MirrorStageScreen(
                 TvSecondaryButton(
                     text = appString(R.string.stage_hud_controls),
                     onClick = { onToggleHud(null) },
-                    modifier = Modifier.testTag("stage_hud_toggle_button")
+                    modifier = Modifier
+                        .focusProperties { canFocus = false }
+                        .testTag("stage_hud_toggle_button")
                 )
             }
         }
 
-        // 6. TV Quick Control HUD Drawer (Switch Mirror / Landscape / DeX, Rotate, Air-Mouse, Disconnect)
+        // 6. TV Quick Control HUD Drawer (Switch Mirror / Landscape / DeX, Rotate, Air-Mouse, Exit, Disconnect)
         AnimatedVisibility(
             visible = uiState.stageHudVisible && session != null,
             enter = fadeIn(),
@@ -325,6 +346,14 @@ fun MirrorStageScreen(
                         borderColor = if (uiState.airMouse.enabled) ElectricCyan else ObsidianBorder,
                         leadingIcon = { Icon(Icons.Rounded.Mouse, contentDescription = null) },
                         modifier = Modifier.testTag("hud_airmouse_button")
+                    )
+                    TvSecondaryButton(
+                        text = appString(R.string.stage_hud_exit),
+                        onClick = {
+                            onToggleHud(false)
+                            onNavigateBack()
+                        },
+                        modifier = Modifier.testTag("hud_exit_stage_button")
                     )
                     TvPrimaryButton(
                         text = appString(R.string.btn_disconnect),
@@ -428,14 +457,13 @@ private fun applyVideoTransformMatrix(
 ) {
     val viewW = textureView.width.toFloat().coerceAtLeast(1f)
     val viewH = textureView.height.toFloat().coerceAtLeast(1f)
-    val isStreamPortrait = streamH > streamW
-
+    // Keep AUTO_LANDSCAPE upright (0°); phone's DisplayListener + True Force Landscape
+    // delivers native 1280x720 horizontal frames instead of tilting portrait UI sideways.
     val degrees = when (displayMode) {
         DisplayMode.STANDARD_MIRROR -> 0f
         DisplayMode.FORCE_LANDSCAPE, DisplayMode.DEX_TV_DESKTOP -> {
             when (rotation) {
-                LandscapeRotation.AUTO_LANDSCAPE -> if (isStreamPortrait) 90f else 0f
-                LandscapeRotation.ROT_0 -> 0f
+                LandscapeRotation.AUTO_LANDSCAPE, LandscapeRotation.ROT_0 -> 0f
                 LandscapeRotation.ROT_90 -> 90f
                 LandscapeRotation.ROT_270 -> 270f
             }

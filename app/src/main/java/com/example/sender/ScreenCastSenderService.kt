@@ -1,5 +1,7 @@
 package com.example.sender
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
@@ -7,10 +9,18 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.content.res.Configuration
+import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.media.AudioAttributes
+import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioPlaybackCaptureConfiguration
+import android.media.AudioRecord
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
@@ -20,8 +30,17 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
+import android.provider.Settings
+import android.util.DisplayMetrics
+import android.view.Display
+import android.view.KeyEvent
+import android.view.View
+import android.view.WindowManager
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.example.R
+import com.example.data.DisplayMode
 import com.example.miracast.SenderState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -53,6 +72,9 @@ data class SenderRuntimeStatus(
     val framesStreamed: Long = 0L,
     val uibcEventsExecuted: Int = 0,
     val lastRemoteEvent: String = "-",
+    val audioStreaming: Boolean = false,
+    val audioStatusNote: String = "",
+    val landscapeLockActive: Boolean = false,
     val errorMessage: String? = null
 )
 
@@ -70,9 +92,13 @@ object SenderRuntimeBus {
 }
 
 /**
- * Android 14+ compliant MediaProjection Foreground Service that connects to MiraBox TV
- * via RTSP M1-M7 (waiting for Remote OK Approval), encodes the phone display to H.264,
- * streams it over TCP 19001, and receives UIBC TV Remote commands over TCP 7237.
+ * MediaProjection Foreground Service that:
+ * - Completes RTSP M1-M7 handshake (awaiting TV Remote OK approval)
+ * - Enforces True Force Landscape on the phone via a 0x0 SYSTEM_ALERT_WINDOW overlay when TV is in Force Landscape / DeX mode
+ * - Dynamically reconfigures VirtualDisplay & H.264 encoder whenever phone orientation changes
+ * - Streams low-jitter zero-B-frame H.264 video with exact PTS over TCP 19001
+ * - Streams internal PCM audio via AudioPlaybackCapture (Android 10+) over TCP 19002
+ * - Receives UIBC TV Remote commands (D-Pad, OK, P+/P-, Vol+/-, Mute, Play/Pause, Air-Mouse, DisplayMode)
  */
 class ScreenCastSenderService : Service() {
 
@@ -85,6 +111,7 @@ class ScreenCastSenderService : Service() {
         const val EXTRA_RTSP_PORT = "rtsp_port"
         const val EXTRA_UIBC_PORT = "uibc_port"
         const val EXTRA_VIDEO_PORT = "video_port"
+        const val EXTRA_AUDIO_PORT = "audio_port"
         const val EXTRA_TARGET_NAME = "target_name"
 
         private const val CHANNEL_ID = "mirabox_cast_sender"
@@ -92,15 +119,30 @@ class ScreenCastSenderService : Service() {
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     private var sessionJob: Job? = null
     private var uibcJob: Job? = null
+    private var audioJob: Job? = null
 
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var encoder: MediaCodec? = null
+    private var activeEncW: Int = 1280
+    private var activeEncH: Int = 720
+    private var activeIsPortrait: Boolean = false
+    @Volatile
+    private var pendingReconfigureSize: Pair<Int, Int>? = null
+    private val encoderLock = Any()
+
     private var rtspSocket: Socket? = null
     private var videoSocket: Socket? = null
+    private var audioSocket: Socket? = null
     private var uibcSocket: Socket? = null
+
+    private var displayManager: DisplayManager? = null
+    private var displayListener: DisplayManager.DisplayListener? = null
+    private var orientationOverlayView: View? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -122,6 +164,7 @@ class ScreenCastSenderService : Service() {
         val rtspPort = intent?.getIntExtra(EXTRA_RTSP_PORT, 7236) ?: 7236
         val uibcPort = intent?.getIntExtra(EXTRA_UIBC_PORT, 7237) ?: 7237
         val videoPort = intent?.getIntExtra(EXTRA_VIDEO_PORT, 19001) ?: 19001
+        val audioPort = intent?.getIntExtra(EXTRA_AUDIO_PORT, 19002) ?: 19002
         val targetName = intent?.getStringExtra(EXTRA_TARGET_NAME) ?: host
 
         if (resultCode != Activity.RESULT_OK || resultData == null || host.isBlank()) {
@@ -147,10 +190,16 @@ class ScreenCastSenderService : Service() {
             rtspPort = rtspPort,
             uibcPort = uibcPort,
             videoPort = videoPort,
+            audioPort = audioPort,
             targetName = targetName
         )
 
         return START_NOT_STICKY
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        checkOrientationChange()
     }
 
     private fun startStreamingSession(
@@ -160,10 +209,12 @@ class ScreenCastSenderService : Service() {
         rtspPort: Int,
         uibcPort: Int,
         videoPort: Int,
+        audioPort: Int,
         targetName: String
     ) {
         sessionJob?.cancel()
         uibcJob?.cancel()
+        audioJob?.cancel()
 
         sessionJob = serviceScope.launch {
             try {
@@ -175,16 +226,14 @@ class ScreenCastSenderService : Service() {
                     )
                 }
 
-                // 1. RTSP Handshake with TV Box (suspends on SETUP until TV Remote OK is pressed)
+                // 1. RTSP Handshake with TV Box
                 val rtsp = Socket()
                 rtsp.connect(InetSocketAddress(host, rtspPort), 8000)
                 rtspSocket = rtsp
                 val out = PrintWriter(rtsp.getOutputStream(), true)
                 val input = BufferedReader(InputStreamReader(rtsp.getInputStream()))
                 val phoneName = "${Build.MANUFACTURER} ${Build.MODEL}".trim()
-                val phoneRes = resources.displayMetrics
-                val srcW = phoneRes.widthPixels.coerceAtLeast(320)
-                val srcH = phoneRes.heightPixels.coerceAtLeast(320)
+                val (initW, initH) = readCurrentScreenDimensions()
 
                 data class RtspResp(
                     val code: Int,
@@ -247,7 +296,7 @@ class ScreenCastSenderService : Service() {
                     "SET_PARAMETER",
                     3,
                     "wfd_client_rtp_ports: RTP/AVP/UDP;unicast 19000 0 mode=play\r\n" +
-                        "wfd_source_resolution: ${srcW}x${srcH}\r\n"
+                        "wfd_source_resolution: ${initW}x${initH}\r\n"
                 )
                 val setupResp = sendRtsp("SETUP", 4)
                 if (setupResp.code == 403) error("Denied by TV Box owner")
@@ -256,19 +305,27 @@ class ScreenCastSenderService : Service() {
                 if (playResp.code != 200) error("RTSP PLAY failed (${playResp.code})")
 
                 val actualVideoPort = playResp.headers["x-video-port"]?.toIntOrNull() ?: videoPort
+                val actualAudioPort = playResp.headers["x-audio-port"]?.toIntOrNull() ?: audioPort
                 val actualUibcPort = playResp.headers["x-uibc-port"]?.toIntOrNull()
                     ?: uibcFromCaps
                     ?: uibcPort
+                val tvDisplayMode = runCatching {
+                    DisplayMode.valueOf(playResp.headers["x-display-mode"] ?: "")
+                }.getOrDefault(DisplayMode.DEX_TV_DESKTOP)
 
-                // 2. Start UIBC Listener Client to receive TV Remote commands
+                // Apply True Force Landscape on the phone if TV is in Force Landscape / DeX Mode
+                applyPhoneLandscapeLock(tvDisplayMode != DisplayMode.STANDARD_MIRROR)
+
+                // 2. Start UIBC Listener Client to receive TV Remote commands & live DisplayMode updates
                 startUibcReceiver(host, actualUibcPort)
 
-                // 3. Connect TCP Video Socket & Initialize MediaProjection + H.264 Encoder
+                // 3. Connect TCP Video Socket
                 val vSocket = connectWithRetry(host, actualVideoPort, connectTimeoutMs = 5000)
                 vSocket.tcpNoDelay = true
                 videoSocket = vSocket
-                val videoOut = DataOutputStream(BufferedOutputStream(vSocket.getOutputStream()))
+                val videoOut = DataOutputStream(BufferedOutputStream(vSocket.getOutputStream(), 65536))
 
+                // 4. Obtain MediaProjection and register dynamic display orientation listener
                 val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                 val projection = mpm.getMediaProjection(resultCode, resultData)
                     ?: error("MediaProjection unavailable")
@@ -277,30 +334,22 @@ class ScreenCastSenderService : Service() {
                     override fun onStop() {
                         stopCastAndSelf()
                     }
-                }, Handler(Looper.getMainLooper()))
+                }, mainHandler)
 
-                val isPortrait = srcH > srcW
-                val maxDim = 1280
-                val rawW = if (isPortrait) ((maxDim * srcW.toFloat()) / srcH).toInt() else maxDim
-                val rawH = if (isPortrait) maxDim else ((maxDim * srcH.toFloat()) / srcW).toInt()
-                val encW = (((rawW + 8) / 16) * 16).coerceIn(368, 1280)
-                val encH = (((rawH + 8) / 16) * 16).coerceIn(368, 1280)
+                registerOrientationListener()
 
-                val (codec, activeEncW, activeEncH) = createConfiguredEncoder(encW, encH, isPortrait)
-                val inputSurface = codec.createInputSurface()
-                codec.start()
-                encoder = codec
+                // Give orientation overlay ~150ms to flip display before first capture if active
+                if (tvDisplayMode != DisplayMode.STANDARD_MIRROR && canDrawOverlayPermission()) {
+                    delay(180)
+                }
 
-                virtualDisplay = projection.createVirtualDisplay(
-                    "MiraBoxCast",
-                    activeEncW,
-                    activeEncH,
-                    resources.displayMetrics.densityDpi,
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                    inputSurface,
-                    null,
-                    null
-                )
+                val (curW, curH) = readCurrentScreenDimensions()
+                synchronized(encoderLock) {
+                    setupEncoderAndDisplayLocked(projection, curW, curH)
+                }
+
+                // 5. Start Internal Audio Streaming (Android 10+ AudioPlaybackCapture)
+                startAudioSender(projection, host, actualAudioPort)
 
                 SenderRuntimeBus.update {
                     it.copy(
@@ -309,9 +358,26 @@ class ScreenCastSenderService : Service() {
                     )
                 }
 
+                // 6. Main H.264 Output Loop with seamless orientation reconfiguration
                 val bufferInfo = MediaCodec.BufferInfo()
                 while (isActive && !vSocket.isClosed) {
-                    val outIdx = codec.dequeueOutputBuffer(bufferInfo, 25_000)
+                    val reconfigSize = pendingReconfigureSize
+                    if (reconfigSize != null) {
+                        pendingReconfigureSize = null
+                        synchronized(encoderLock) {
+                            setupEncoderAndDisplayLocked(
+                                projection = projection,
+                                screenW = reconfigSize.first,
+                                screenH = reconfigSize.second
+                            )
+                        }
+                    }
+
+                    val codec = synchronized(encoderLock) { encoder } ?: break
+                    val encW = activeEncW
+                    val encH = activeEncH
+                    val outIdx = runCatching { codec.dequeueOutputBuffer(bufferInfo, 20_000) }
+                        .getOrDefault(MediaCodec.INFO_TRY_AGAIN_LATER)
                     if (outIdx >= 0) {
                         val buf: ByteBuffer? = codec.getOutputBuffer(outIdx)
                         if (buf != null && bufferInfo.size > 0) {
@@ -321,8 +387,9 @@ class ScreenCastSenderService : Service() {
                             buf.get(frameBytes)
                             videoOut.writeInt(frameBytes.size)
                             videoOut.writeInt(bufferInfo.flags)
-                            videoOut.writeInt(activeEncW)
-                            videoOut.writeInt(activeEncH)
+                            videoOut.writeInt(encW)
+                            videoOut.writeInt(encH)
+                            videoOut.writeLong(bufferInfo.presentationTimeUs)
                             videoOut.write(frameBytes)
                             videoOut.flush()
                             SenderRuntimeBus.update { st ->
@@ -341,6 +408,224 @@ class ScreenCastSenderService : Service() {
                 }
             } finally {
                 cleanupResources()
+            }
+        }
+    }
+
+    private fun setupEncoderAndDisplayLocked(
+        projection: MediaProjection,
+        screenW: Int,
+        screenH: Int
+    ) {
+        runCatching { virtualDisplay?.release() }
+        virtualDisplay = null
+        runCatching {
+            encoder?.stop()
+            encoder?.release()
+        }
+        encoder = null
+
+        val isPortrait = screenH > screenW
+        val maxDim = 1280
+        val rawW = if (isPortrait) ((maxDim * screenW.toFloat()) / screenH).toInt() else maxDim
+        val rawH = if (isPortrait) maxDim else ((maxDim * screenH.toFloat()) / screenW).toInt()
+        val encW = (((rawW + 8) / 16) * 16).coerceIn(368, 1280)
+        val encH = (((rawH + 8) / 16) * 16).coerceIn(368, 1280)
+
+        val (codec, w, h) = createConfiguredEncoder(encW, encH, isPortrait)
+        val inputSurface = codec.createInputSurface()
+        codec.start()
+        encoder = codec
+        activeEncW = w
+        activeEncH = h
+        activeIsPortrait = isPortrait
+
+        virtualDisplay = projection.createVirtualDisplay(
+            "MiraBoxCast",
+            w,
+            h,
+            resources.displayMetrics.densityDpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            inputSurface,
+            null,
+            null
+        )
+    }
+
+    private fun checkOrientationChange() {
+        if (mediaProjection == null) return
+        val (w, h) = readCurrentScreenDimensions()
+        val nowPortrait = h > w
+        if (nowPortrait != activeIsPortrait) {
+            pendingReconfigureSize = w to h
+        }
+    }
+
+    private fun registerOrientationListener() {
+        val dm = getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager ?: return
+        displayManager = dm
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) = Unit
+            override fun onDisplayRemoved(displayId: Int) = Unit
+            override fun onDisplayChanged(displayId: Int) {
+                if (displayId == Display.DEFAULT_DISPLAY) {
+                    checkOrientationChange()
+                }
+            }
+        }
+        displayListener = listener
+        dm.registerDisplayListener(listener, mainHandler)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun readCurrentScreenDimensions(): Pair<Int, Int> {
+        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val b = wm.currentWindowMetrics.bounds
+            b.width().coerceAtLeast(320) to b.height().coerceAtLeast(320)
+        } else {
+            val dm = DisplayMetrics()
+            wm.defaultDisplay.getRealMetrics(dm)
+            dm.widthPixels.coerceAtLeast(320) to dm.heightPixels.coerceAtLeast(320)
+        }
+    }
+
+    private fun canDrawOverlayPermission(): Boolean {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)
+    }
+
+    private fun applyPhoneLandscapeLock(forceLandscape: Boolean) {
+        mainHandler.post {
+            val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            if (!forceLandscape || !canDrawOverlayPermission()) {
+                orientationOverlayView?.let { v ->
+                    runCatching { wm.removeView(v) }
+                }
+                orientationOverlayView = null
+                SenderRuntimeBus.update { it.copy(landscapeLockActive = false) }
+                return@post
+            }
+
+            if (orientationOverlayView != null) {
+                SenderRuntimeBus.update { it.copy(landscapeLockActive = true) }
+                return@post
+            }
+
+            val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
+            }
+
+            val params = WindowManager.LayoutParams(
+                0,
+                0,
+                overlayType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                screenOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            }
+
+            val view = View(this)
+            runCatching {
+                wm.addView(view, params)
+                orientationOverlayView = view
+                SenderRuntimeBus.update { it.copy(landscapeLockActive = true) }
+            }.onFailure {
+                SenderRuntimeBus.update { it.copy(landscapeLockActive = false) }
+            }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startAudioSender(projection: MediaProjection, host: String, audioPort: Int) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            SenderRuntimeBus.update {
+                it.copy(
+                    audioStreaming = false,
+                    audioStatusNote = getString(R.string.sender_audio_android9_limit)
+                )
+            }
+            return
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            SenderRuntimeBus.update {
+                it.copy(
+                    audioStreaming = false,
+                    audioStatusNote = getString(R.string.sender_audio_perm_missing)
+                )
+            }
+            return
+        }
+
+        audioJob = serviceScope.launch {
+            var recorder: AudioRecord? = null
+            var sock: Socket? = null
+            try {
+                val sampleRate = 48000
+                val channelMask = AudioFormat.CHANNEL_IN_STEREO
+                val encoding = AudioFormat.ENCODING_PCM_16BIT
+                val minBuf = AudioRecord.getMinBufferSize(sampleRate, channelMask, encoding)
+                    .coerceAtLeast(4096)
+
+                val captureConfig = AudioPlaybackCaptureConfiguration.Builder(projection)
+                    .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+                    .addMatchingUsage(AudioAttributes.USAGE_GAME)
+                    .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+                    .build()
+
+                recorder = AudioRecord.Builder()
+                    .setAudioPlaybackCaptureConfig(captureConfig)
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(encoding)
+                            .setSampleRate(sampleRate)
+                            .setChannelMask(channelMask)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(minBuf * 2)
+                    .build()
+
+                sock = connectWithRetry(host, audioPort, connectTimeoutMs = 4000)
+                sock.tcpNoDelay = true
+                audioSocket = sock
+                val dos = DataOutputStream(BufferedOutputStream(sock.getOutputStream(), 8192))
+                dos.writeInt(sampleRate)
+                dos.writeInt(2) // Stereo
+                dos.flush()
+
+                recorder.startRecording()
+                SenderRuntimeBus.update {
+                    it.copy(
+                        audioStreaming = true,
+                        audioStatusNote = getString(R.string.sender_audio_active)
+                    )
+                }
+
+                val pcmBuf = ByteArray(3840) // ~20ms of 48kHz 16-bit stereo
+                while (isActive && !sock.isClosed) {
+                    val read = recorder.read(pcmBuf, 0, pcmBuf.size)
+                    if (read > 0) {
+                        dos.writeInt(read)
+                        dos.write(pcmBuf, 0, read)
+                        dos.flush()
+                    }
+                }
+            } catch (_: Exception) {
+                SenderRuntimeBus.update {
+                    it.copy(audioStreaming = false)
+                }
+            } finally {
+                runCatching { recorder?.stop() }
+                runCatching { recorder?.release() }
+                runCatching { sock?.close() }
+                audioSocket = null
             }
         }
     }
@@ -387,15 +672,36 @@ class ScreenCastSenderService : Service() {
                         MediaFormat.KEY_COLOR_FORMAT,
                         MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
                     )
-                    setInteger(MediaFormat.KEY_BIT_RATE, 3_500_000)
+                    setInteger(MediaFormat.KEY_BIT_RATE, 5_000_000)
                     setInteger(MediaFormat.KEY_FRAME_RATE, 30)
-                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+                    setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000L)
+                    setInteger(MediaFormat.KEY_PRIORITY, 0)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+                    }
                 }
                 codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 return Triple(codec, w, h)
-            } catch (e: Exception) {
-                runCatching { codec.release() }
-                lastException = e
+            } catch (_: Exception) {
+                // Retry without optional B-frame/priority keys on older HAL encoders
+                runCatching { codec.reset() }
+                try {
+                    val basic = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
+                        setInteger(
+                            MediaFormat.KEY_COLOR_FORMAT,
+                            MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+                        )
+                        setInteger(MediaFormat.KEY_BIT_RATE, 4_500_000)
+                        setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+                        setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+                    }
+                    codec.configure(basic, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                    return Triple(codec, w, h)
+                } catch (e2: Exception) {
+                    runCatching { codec.release() }
+                    lastException = e2
+                }
             }
         }
         throw lastException ?: IllegalStateException("No compatible H.264 encoder")
@@ -424,19 +730,7 @@ class ScreenCastSenderService : Service() {
                                 if (body.size >= 6) {
                                     val hid = ((body[4].toInt() and 0xFF) shl 8) or
                                         (body[5].toInt() and 0xFF)
-                                    when (hid) {
-                                        0x0080 -> audioManager?.adjustStreamVolume(
-                                            AudioManager.STREAM_MUSIC,
-                                            AudioManager.ADJUST_RAISE,
-                                            AudioManager.FLAG_SHOW_UI
-                                        )
-                                        0x0081 -> audioManager?.adjustStreamVolume(
-                                            AudioManager.STREAM_MUSIC,
-                                            AudioManager.ADJUST_LOWER,
-                                            AudioManager.FLAG_SHOW_UI
-                                        )
-                                        else -> acc?.executeRemoteKey(hid)
-                                    }
+                                    handleRemoteHidKey(hid, audioManager, acc)
                                     SenderRuntimeBus.update {
                                         it.copy(
                                             uibcEventsExecuted = it.uibcEventsExecuted + 1,
@@ -462,6 +756,14 @@ class ScreenCastSenderService : Service() {
                                     }
                                 }
                             }
+                            0x50 -> { // Live DisplayMode Sync from TV Box
+                                val ord = body[3].toInt() and 0xFF
+                                val mode = DisplayMode.entries.getOrNull(ord) ?: DisplayMode.DEX_TV_DESKTOP
+                                applyPhoneLandscapeLock(mode != DisplayMode.STANDARD_MIRROR)
+                                SenderRuntimeBus.update {
+                                    it.copy(lastRemoteEvent = "MODE ${mode.name}")
+                                }
+                            }
                         }
                     }
                 }
@@ -469,9 +771,45 @@ class ScreenCastSenderService : Service() {
         }
     }
 
+    private fun handleRemoteHidKey(
+        hid: Int,
+        audioManager: AudioManager?,
+        acc: MiraBoxRemoteAccessibilityService?
+    ) {
+        when (hid) {
+            0x0080 -> audioManager?.adjustStreamVolume(
+                AudioManager.STREAM_MUSIC,
+                AudioManager.ADJUST_RAISE,
+                AudioManager.FLAG_SHOW_UI
+            )
+            0x0081 -> audioManager?.adjustStreamVolume(
+                AudioManager.STREAM_MUSIC,
+                AudioManager.ADJUST_LOWER,
+                AudioManager.FLAG_SHOW_UI
+            )
+            0x007F -> audioManager?.adjustStreamVolume(
+                AudioManager.STREAM_MUSIC,
+                AudioManager.ADJUST_TOGGLE_MUTE,
+                AudioManager.FLAG_SHOW_UI
+            )
+            0x00E8 -> dispatchMediaKey(audioManager, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+            0x00EB -> dispatchMediaKey(audioManager, KeyEvent.KEYCODE_MEDIA_NEXT)
+            0x00EC -> dispatchMediaKey(audioManager, KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+            else -> acc?.executeRemoteKey(hid)
+        }
+    }
+
+    private fun dispatchMediaKey(audioManager: AudioManager?, androidKeyCode: Int) {
+        if (audioManager == null) return
+        val now = SystemClock.uptimeMillis()
+        audioManager.dispatchMediaKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, androidKeyCode, 0))
+        audioManager.dispatchMediaKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, androidKeyCode, 0))
+    }
+
     private fun stopCastAndSelf() {
         sessionJob?.cancel()
         uibcJob?.cancel()
+        audioJob?.cancel()
         cleanupResources()
         SenderRuntimeBus.reset()
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -479,19 +817,28 @@ class ScreenCastSenderService : Service() {
     }
 
     private fun cleanupResources() {
-        runCatching { virtualDisplay?.release() }
-        virtualDisplay = null
-        runCatching {
-            encoder?.stop()
-            encoder?.release()
+        applyPhoneLandscapeLock(false)
+        displayListener?.let { listener ->
+            runCatching { displayManager?.unregisterDisplayListener(listener) }
         }
-        encoder = null
+        displayListener = null
+        synchronized(encoderLock) {
+            runCatching { virtualDisplay?.release() }
+            virtualDisplay = null
+            runCatching {
+                encoder?.stop()
+                encoder?.release()
+            }
+            encoder = null
+        }
         runCatching { mediaProjection?.stop() }
         mediaProjection = null
         runCatching { videoSocket?.close() }
+        runCatching { audioSocket?.close() }
         runCatching { uibcSocket?.close() }
         runCatching { rtspSocket?.close() }
         videoSocket = null
+        audioSocket = null
         uibcSocket = null
         rtspSocket = null
     }

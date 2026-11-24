@@ -5,6 +5,7 @@ import com.example.data.DisplayMode
 import com.example.data.ReceiverSettings
 import com.example.miracast.ApprovalDecision
 import com.example.miracast.ServerState
+import com.example.network.AudioStreamReceiver
 import com.example.network.MiracastRtspServer
 import com.example.network.RtpVideoReceiver
 import com.example.network.UibcServer
@@ -27,7 +28,7 @@ import java.net.Socket
 class MiracastProtocolTest {
 
     @Test
-    fun `uibc server encodes and sends key and touch packets`() = runBlocking {
+    fun `uibc server encodes key touch channel and display mode packets`() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val uibc = UibcServer(scope)
         val port = uibc.start(0)
@@ -36,11 +37,16 @@ class MiracastProtocolTest {
         val client = Socket("127.0.0.1", port)
         delay(100)
         uibc.sendKeyEvent(KeyEvent.KEYCODE_DPAD_CENTER, true)
+        uibc.sendKeyEvent(KeyEvent.KEYCODE_CHANNEL_UP, true)
+        uibc.sendKeyEvent(KeyEvent.KEYCODE_CHANNEL_DOWN, true)
+        uibc.sendKeyEvent(KeyEvent.KEYCODE_VOLUME_MUTE, true)
         uibc.sendTouchEvent(0, 0.5f, 0.5f, 1920, 1080)
+        uibc.sendDisplayMode(DisplayMode.FORCE_LANDSCAPE)
         delay(150)
 
         val telemetry = uibc.telemetry.value
-        assertTrue(telemetry.packetsSent >= 2)
+        assertTrue(telemetry.packetsSent >= 6)
+        assertTrue(telemetry.lastPacketSummary.contains("FORCE_LANDSCAPE"))
         assertTrue(telemetry.lastPacketHex.isNotEmpty())
 
         client.close()
@@ -49,10 +55,11 @@ class MiracastProtocolTest {
     }
 
     @Test
-    fun `rtsp server enforces ok approval before play and advertises dex edid`() = runBlocking {
+    fun `rtsp server enforces ok approval before play and opens video and audio ports immediately`() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val uibc = UibcServer(scope)
         val rtp = RtpVideoReceiver(scope)
+        val audio = AudioStreamReceiver(scope)
         val settings = ReceiverSettings(
             requireOkApproval = true,
             displayMode = DisplayMode.DEX_TV_DESKTOP
@@ -61,6 +68,7 @@ class MiracastProtocolTest {
             scope = scope,
             uibcServer = uibc,
             rtpVideoReceiver = rtp,
+            audioStreamReceiver = audio,
             getSettings = { settings },
             onTrustDevice = {}
         )
@@ -101,20 +109,33 @@ class MiracastProtocolTest {
 
         val videoPort = Regex("X-Video-Port:\\s*(\\d+)").find(playResp)
             ?.groupValues?.getOrNull(1)?.toIntOrNull()
+        val audioPort = Regex("X-Audio-Port:\\s*(\\d+)").find(playResp)
+            ?.groupValues?.getOrNull(1)?.toIntOrNull()
         val uibcPort = Regex("X-Uibc-Port:\\s*(\\d+)").find(playResp)
             ?.groupValues?.getOrNull(1)?.toIntOrNull()
         assertNotNull(videoPort)
+        assertNotNull(audioPort)
         assertNotNull(uibcPort)
+        assertTrue(playResp.contains("X-Display-Mode: DEX_TV_DESKTOP"))
 
-        // Immediately connect to X-Video-Port without any delay (must not throw ECONNREFUSED)
+        // Immediately connect to X-Video-Port and send config + keyframe with 24-byte header (including ptsUs)
         val videoClient = Socket("127.0.0.1", videoPort!!)
         val dos = java.io.DataOutputStream(videoClient.getOutputStream())
-        val dummyNal = byteArrayOf(0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E)
-        dos.writeInt(dummyNal.size)
+        val configNal = byteArrayOf(0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E)
+        dos.writeInt(configNal.size)
         dos.writeInt(2) // BUFFER_FLAG_CODEC_CONFIG
-        dos.writeInt(720)
         dos.writeInt(1280)
-        dos.write(dummyNal)
+        dos.writeInt(720)
+        dos.writeLong(1000L)
+        dos.write(configNal)
+
+        val keyNal = byteArrayOf(0x00, 0x00, 0x00, 0x01, 0x65, 0x88.toByte(), 0x84.toByte(), 0x21)
+        dos.writeInt(keyNal.size)
+        dos.writeInt(1) // BUFFER_FLAG_KEY_FRAME
+        dos.writeInt(1280)
+        dos.writeInt(720)
+        dos.writeLong(34_333L)
+        dos.write(keyNal)
         dos.flush()
 
         var waitMs = 0
@@ -123,7 +144,7 @@ class MiracastProtocolTest {
             waitMs += 25
         }
         assertTrue(rtp.receivedFrames.value >= 1L)
-        assertEquals(720 to 1280, rtp.streamResolution.value)
+        assertEquals(1280 to 720, rtp.streamResolution.value)
 
         videoClient.close()
         approver.join()

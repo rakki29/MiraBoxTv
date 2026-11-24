@@ -40,6 +40,7 @@ class MiracastRtspServer(
     private val scope: CoroutineScope,
     private val uibcServer: UibcServer,
     private val rtpVideoReceiver: RtpVideoReceiver,
+    private val audioStreamReceiver: AudioStreamReceiver = AudioStreamReceiver(scope),
     private val getSettings: () -> ReceiverSettings,
     private val onTrustDevice: suspend (String) -> Unit
 ) {
@@ -275,6 +276,8 @@ class MiracastRtspServer(
                             ConnectionChannel.WIFI_LAN_RTSP
                         }
                         val tcpVideoPort = rtpVideoReceiver.start(negotiatedRtpPort, 19001)
+                        val tcpAudioPort = audioStreamReceiver.start(19002)
+                        val displayMode = getSettings().displayMode
                         _activeSession.value = ActiveMirrorSession(
                             sessionId = sessionId,
                             deviceName = deviceName,
@@ -282,13 +285,14 @@ class MiracastRtspServer(
                             channel = channel,
                             rtpPort = negotiatedRtpPort,
                             tcpVideoPort = tcpVideoPort,
+                            tcpAudioPort = tcpAudioPort,
                             uibcPort = uibcPort,
                             sourceWidth = sourceWidth,
                             sourceHeight = sourceHeight,
                             isLoopbackDiagnostic = isLoopback
                         )
                         _serverState.value = ServerState.MIRRORING
-                        appendLog("Mirroring PLAY started (RTP=$negotiatedRtpPort, TCP=$tcpVideoPort, UIBC=$uibcPort)")
+                        appendLog("PLAY started (Video=$tcpVideoPort, Audio=$tcpAudioPort, UIBC=$uibcPort, Mode=${displayMode.name})")
                         sendRtspResponse(
                             writer,
                             "200 OK",
@@ -296,7 +300,9 @@ class MiracastRtspServer(
                             mapOf(
                                 "Session" to sessionId,
                                 "X-Video-Port" to tcpVideoPort.toString(),
-                                "X-Uibc-Port" to uibcPort.toString()
+                                "X-Audio-Port" to tcpAudioPort.toString(),
+                                "X-Uibc-Port" to uibcPort.toString(),
+                                "X-Display-Mode" to displayMode.name
                             )
                         )
                     }
@@ -445,6 +451,7 @@ class MiracastRtspServer(
 
     private fun clearSessionToListening() {
         rtpVideoReceiver.stop()
+        audioStreamReceiver.stop()
         _activeSession.value = null
         if (serverSocket != null && serverSocket?.isClosed == false) {
             _serverState.value = ServerState.LISTENING
@@ -530,6 +537,7 @@ class MiracastRtspServer(
         activeClientSocket = null
         serverSocket = null
         rtpVideoReceiver.stop()
+        audioStreamReceiver.stop()
         uibcServer.stop()
         _activeSession.value = null
         _serverState.value = ServerState.STOPPED

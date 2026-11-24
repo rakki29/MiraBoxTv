@@ -46,6 +46,7 @@ class RtpVideoReceiver(private val scope: CoroutineScope) {
     private var lastCodecConfig: ByteArray? = null
     private var lastPendingKeyFrame: ByteArray? = null
     private var lastFrameSize: Pair<Int, Int>? = null
+    private var totalFramesCount: Long = 0L
     private val codecLock = Any()
 
     fun attachSurface(surface: Surface?, width: Int = 1920, height: Int = 1080) {
@@ -133,7 +134,8 @@ class RtpVideoReceiver(private val scope: CoroutineScope) {
                             val flags = dis.readInt()
                             val frameW = dis.readInt()
                             val frameH = dis.readInt()
-                            if (frameW > 0 && frameH > 0) {
+                            val ptsUs = dis.readLong()
+                            if (frameW > 0 && frameH > 0 && _streamResolution.value != (frameW to frameH)) {
                                 _streamResolution.value = frameW to frameH
                             }
                             val payload = ByteArray(frameLen)
@@ -144,9 +146,15 @@ class RtpVideoReceiver(private val scope: CoroutineScope) {
                                 isConfig = isConfig,
                                 flags = flags,
                                 frameW = frameW,
-                                frameH = frameH
+                                frameH = frameH,
+                                ptsUs = ptsUs
                             )
-                            _receivedFrames.value += 1
+                            if (!isConfig) {
+                                totalFramesCount += 1L
+                                if (totalFramesCount <= 3L || totalFramesCount % 15L == 0L) {
+                                    _receivedFrames.value = totalFramesCount
+                                }
+                            }
                         }
                     } catch (_: Exception) {
                         if (!isActive || tServer.isClosed) break
@@ -254,7 +262,8 @@ class RtpVideoReceiver(private val scope: CoroutineScope) {
         isConfig: Boolean,
         flags: Int = 0,
         frameW: Int = 0,
-        frameH: Int = 0
+        frameH: Int = 0,
+        ptsUs: Long = System.nanoTime() / 1000L
     ) {
         synchronized(codecLock) {
             if (frameW > 0 && frameH > 0) {
@@ -283,11 +292,16 @@ class RtpVideoReceiver(private val scope: CoroutineScope) {
 
             val codec = decoder ?: return
             val bufferFlags = if (isConfig) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else flags
-            queueToCodecLocked(codec, data, bufferFlags)
+            queueToCodecLocked(codec, data, bufferFlags, ptsUs)
         }
     }
 
-    private fun queueToCodecLocked(codec: MediaCodec, data: ByteArray, bufferFlags: Int) {
+    private fun queueToCodecLocked(
+        codec: MediaCodec,
+        data: ByteArray,
+        bufferFlags: Int,
+        ptsUs: Long = System.nanoTime() / 1000L
+    ) {
         runCatching {
             val inputIndex = codec.dequeueInputBuffer(15_000)
             if (inputIndex >= 0) {
@@ -298,7 +312,7 @@ class RtpVideoReceiver(private val scope: CoroutineScope) {
                     inputIndex,
                     0,
                     data.size,
-                    System.nanoTime() / 1000L,
+                    ptsUs,
                     bufferFlags
                 )
             }
@@ -312,7 +326,7 @@ class RtpVideoReceiver(private val scope: CoroutineScope) {
                 ) {
                     val w = outFormat.getInteger(MediaFormat.KEY_WIDTH)
                     val h = outFormat.getInteger(MediaFormat.KEY_HEIGHT)
-                    if (w > 0 && h > 0) {
+                    if (w > 0 && h > 0 && _streamResolution.value != (w to h)) {
                         _streamResolution.value = w to h
                     }
                 }
@@ -336,6 +350,7 @@ class RtpVideoReceiver(private val scope: CoroutineScope) {
             lastPendingKeyFrame = null
             lastFrameSize = null
         }
+        totalFramesCount = 0L
         _receivedFrames.value = 0L
         _streamResolution.value = null
     }

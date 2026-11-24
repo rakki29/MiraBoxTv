@@ -36,6 +36,7 @@ data class ActiveMirrorSession(
     val channel: ConnectionChannel,
     val rtpPort: Int,
     val tcpVideoPort: Int = 19001,
+    val tcpAudioPort: Int = 19002,
     val uibcPort: Int,
     val sourceWidth: Int = 1080,
     val sourceHeight: Int = 2400,
@@ -81,6 +82,7 @@ data class NetworkEndpoints(
     val uibcPort: Int = 7237,
     val rtpVideoPort: Int = 19000,
     val tcpVideoPort: Int = 19001,
+    val tcpAudioPort: Int = 19002,
     val nsdRegistered: Boolean = false,
     val nsdServiceName: String = ""
 )
@@ -90,7 +92,8 @@ data class DiscoveredReceiver(
     val hostAddress: String,
     val rtspPort: Int,
     val uibcPort: Int,
-    val tcpVideoPort: Int
+    val tcpVideoPort: Int,
+    val tcpAudioPort: Int = 19002
 )
 
 enum class SenderState {

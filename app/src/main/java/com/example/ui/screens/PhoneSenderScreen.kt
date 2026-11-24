@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import android.os.Build
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +22,7 @@ import androidx.compose.material.icons.rounded.Cast
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.ScreenRotation
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.material3.Icon
@@ -28,6 +31,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,8 +40,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.R
 import com.example.miracast.DiscoveredReceiver
 import com.example.miracast.SenderState
@@ -64,10 +72,28 @@ fun PhoneSenderScreen(
     onStartCast: (host: String, rtspPort: Int, uibcPort: Int, videoPort: Int, targetName: String) -> Unit,
     onStopCast: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onOpenOverlaySettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val sender = uiState.senderStatus
-    val accessibilityActive = MiraBoxRemoteAccessibilityService.isEnabled()
+    var accessibilityActive by remember { mutableStateOf(MiraBoxRemoteAccessibilityService.isEnabled()) }
+    var overlayGranted by remember {
+        mutableStateOf(Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context))
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                accessibilityActive = MiraBoxRemoteAccessibilityService.isEnabled()
+                overlayGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     var manualHost by remember { mutableStateOf("192.168.1.") }
     var manualPort by remember { mutableStateOf("7236") }
 
@@ -138,24 +164,36 @@ fun PhoneSenderScreen(
                 )
 
                 if (sender.state == SenderState.STREAMING) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
                             .background(ObsidianCardElevated)
                             .padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(
-                            text = "Frames: ${sender.framesStreamed}",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = EmeraldMint
-                        )
-                        Text(
-                            text = "UIBC Cmds: ${sender.uibcEventsExecuted} (${sender.lastRemoteEvent})",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = ElectricCyan
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Frames: ${sender.framesStreamed}",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = EmeraldMint
+                            )
+                            Text(
+                                text = "UIBC Cmds: ${sender.uibcEventsExecuted} (${sender.lastRemoteEvent})",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = ElectricCyan
+                            )
+                        }
+                        if (sender.audioStatusNote.isNotEmpty()) {
+                            Text(
+                                text = sender.audioStatusNote,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (sender.audioStreaming) EmeraldMint else AmberAlert
+                            )
+                        }
                     }
                 }
             }
@@ -203,6 +241,53 @@ fun PhoneSenderScreen(
                             onClick = onOpenAccessibilitySettings,
                             containerColor = AmberAlert,
                             modifier = Modifier.testTag("enable_accessibility_button")
+                        )
+                    }
+                }
+            }
+        }
+
+        // True Force Horizontal Landscape Overlay Permission Card
+        item {
+            TvGlassCard(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (overlayGranted) Icons.Rounded.CheckCircle else Icons.Rounded.ScreenRotation,
+                            contentDescription = null,
+                            tint = if (overlayGranted) EmeraldMint else ElectricCyan,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Column {
+                            Text(
+                                text = if (overlayGranted) {
+                                    appString(R.string.sender_overlay_enabled)
+                                } else {
+                                    appString(R.string.sender_overlay_title)
+                                },
+                                style = MaterialTheme.typography.titleMedium,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = appString(R.string.sender_overlay_desc),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+                    if (!overlayGranted) {
+                        TvPrimaryButton(
+                            text = appString(R.string.sender_overlay_btn),
+                            onClick = onOpenOverlaySettings,
+                            modifier = Modifier.testTag("enable_overlay_button")
                         )
                     }
                 }

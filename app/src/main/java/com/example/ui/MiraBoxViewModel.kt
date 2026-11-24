@@ -22,6 +22,7 @@ import com.example.miracast.PendingConnectionRequest
 import com.example.miracast.ServerState
 import com.example.miracast.UibcTelemetry
 import com.example.miracast.WifiDirectStatus
+import com.example.network.AudioStreamReceiver
 import com.example.network.MiracastRtspServer
 import com.example.network.RtpVideoReceiver
 import com.example.network.UibcServer
@@ -78,7 +79,8 @@ data class MiraBoxUiState(
     val loopbackAppState: LoopbackAppState = LoopbackAppState(),
     val stageHudVisible: Boolean = false,
     val discoveredReceivers: List<DiscoveredReceiver> = emptyList(),
-    val senderStatus: SenderRuntimeStatus = SenderRuntimeStatus()
+    val senderStatus: SenderRuntimeStatus = SenderRuntimeStatus(),
+    val audioActive: Boolean = false
 )
 
 class MiraBoxViewModel(application: Application) : AndroidViewModel(application) {
@@ -86,6 +88,7 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
     private val settingsRepository = SettingsRepository(application)
     private val uibcServer = UibcServer(viewModelScope)
     private val rtpVideoReceiver = RtpVideoReceiver(viewModelScope)
+    private val audioStreamReceiver = AudioStreamReceiver(viewModelScope)
     private val nsdReceiverBrowser = NsdReceiverBrowser(application)
 
     private val _latestSettings = MutableStateFlow(ReceiverSettings())
@@ -94,6 +97,7 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
         scope = viewModelScope,
         uibcServer = uibcServer,
         rtpVideoReceiver = rtpVideoReceiver,
+        audioStreamReceiver = audioStreamReceiver,
         getSettings = { _latestSettings.value },
         onTrustDevice = { deviceId -> settingsRepository.addTrustedDevice(deviceId) }
     )
@@ -157,9 +161,10 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
 
     private val senderFlow = combine(
         nsdReceiverBrowser.receivers,
-        SenderRuntimeBus.status
-    ) { receivers, status ->
-        receivers to status
+        SenderRuntimeBus.status,
+        audioStreamReceiver.audioActive
+    ) { receivers, status, audio ->
+        Triple(receivers, status, audio)
     }
 
     val uiState: StateFlow<MiraBoxUiState> = combine(
@@ -185,7 +190,8 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
             loopbackAppState = nav.loopback,
             stageHudVisible = nav.hud,
             discoveredReceivers = sender.first,
-            senderStatus = sender.second
+            senderStatus = sender.second,
+            audioActive = sender.third
         )
     }.stateIn(
         scope = viewModelScope,
@@ -306,22 +312,47 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Handles TV Box Remote Control input while on the Mirror Stage or Remote Pad.
-     * Returns true if the event was consumed and forwarded via UIBC.
+     * Handles TV Box Remote Control input while on the Mirror Stage.
+     * Separates TV HUD navigation from Phone UIBC injection with zero button overlap.
      */
-    fun handleStageRemoteKey(keyCode: Int, isDown: Boolean): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_INFO) {
-            if (isDown) toggleStageHud()
+    fun handleStageRemoteKey(keyCode: Int, isDown: Boolean, repeatCount: Int = 0): Boolean {
+        // Open/close TV Box HUD on Menu, Info, Settings, Guide, or Long-Press Back
+        if (keyCode == KeyEvent.KEYCODE_MENU ||
+            keyCode == KeyEvent.KEYCODE_INFO ||
+            keyCode == KeyEvent.KEYCODE_SETTINGS ||
+            keyCode == KeyEvent.KEYCODE_GUIDE
+        ) {
+            if (isDown && repeatCount == 0) toggleStageHud()
             return true
         }
 
         if (_stageHudVisible.value) {
-            // Let Compose focus traversal control the TV HUD buttons when HUD is open
-            if (keyCode == KeyEvent.KEYCODE_BACK && !isDown) {
-                toggleStageHud(false)
+            // While HUD is open, BACK closes HUD and D-Pad/OK navigate HUD buttons cleanly
+            if (keyCode == KeyEvent.KEYCODE_BACK) {
+                if (!isDown) toggleStageHud(false)
                 return true
             }
             return false
+        }
+
+        // Long-press BACK opens the TV HUD (convenient for remotes without a dedicated MENU key)
+        if (keyCode == KeyEvent.KEYCODE_BACK && isDown && repeatCount >= 4) {
+            toggleStageHud(true)
+            return true
+        }
+
+        // Ignore auto-repeat on discrete action keys (prevents accidental double-taps on OK/Back/Home)
+        val isDiscreteKey = keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+            keyCode == KeyEvent.KEYCODE_ENTER ||
+            keyCode == KeyEvent.KEYCODE_BACK ||
+            keyCode == KeyEvent.KEYCODE_HOME ||
+            keyCode == KeyEvent.KEYCODE_APP_SWITCH ||
+            keyCode == KeyEvent.KEYCODE_VOLUME_MUTE ||
+            keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ||
+            keyCode == KeyEvent.KEYCODE_MEDIA_PLAY ||
+            keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE
+        if (isDown && repeatCount > 0 && isDiscreteKey) {
+            return true
         }
 
         val mouse = _airMouse.value
@@ -363,7 +394,7 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
             return true
         }
 
-        // Standard UIBC Key Injection (D-Pad, Back, Home, Volume, Media)
+        // Standard UIBC Key Injection (D-Pad, OK, P+/P-, Back, Home, Volume, Mute, Play/Pause, 0-9)
         uibcServer.sendKeyEvent(keyCode, isDown)
         if (isDown) {
             updateLoopbackDpadState(keyCode)
@@ -464,7 +495,10 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setDisplayMode(mode: DisplayMode) {
-        viewModelScope.launch { settingsRepository.setDisplayMode(mode) }
+        viewModelScope.launch {
+            settingsRepository.setDisplayMode(mode)
+            uibcServer.sendDisplayMode(mode)
+        }
     }
 
     fun setLandscapeRotation(rotation: LandscapeRotation) {

@@ -25,7 +25,11 @@ import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.SettingsRemote
+import androidx.compose.material.icons.rounded.VolumeDown
+import androidx.compose.material.icons.rounded.VolumeOff
+import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -272,6 +276,46 @@ fun RemoteControlScreen(
                             onClick = { onSendVirtualKey(KeyEvent.KEYCODE_APP_SWITCH) },
                             leadingIcon = { Icon(Icons.Rounded.Apps, contentDescription = null) },
                             modifier = Modifier.testTag("virtual_btn_recents")
+                        )
+                    }
+
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        TvSecondaryButton(
+                            text = appString(R.string.remote_btn_ch_up),
+                            onClick = { onSendVirtualKey(KeyEvent.KEYCODE_CHANNEL_UP) },
+                            modifier = Modifier.testTag("virtual_btn_ch_up")
+                        )
+                        TvSecondaryButton(
+                            text = appString(R.string.remote_btn_ch_down),
+                            onClick = { onSendVirtualKey(KeyEvent.KEYCODE_CHANNEL_DOWN) },
+                            modifier = Modifier.testTag("virtual_btn_ch_down")
+                        )
+                        TvSecondaryButton(
+                            text = appString(R.string.remote_btn_vol_up),
+                            onClick = { onSendVirtualKey(KeyEvent.KEYCODE_VOLUME_UP) },
+                            leadingIcon = { Icon(Icons.Rounded.VolumeUp, contentDescription = null) },
+                            modifier = Modifier.testTag("virtual_btn_vol_up")
+                        )
+                        TvSecondaryButton(
+                            text = appString(R.string.remote_btn_vol_down),
+                            onClick = { onSendVirtualKey(KeyEvent.KEYCODE_VOLUME_DOWN) },
+                            leadingIcon = { Icon(Icons.Rounded.VolumeDown, contentDescription = null) },
+                            modifier = Modifier.testTag("virtual_btn_vol_down")
+                        )
+                        TvSecondaryButton(
+                            text = appString(R.string.remote_btn_mute),
+                            onClick = { onSendVirtualKey(KeyEvent.KEYCODE_VOLUME_MUTE) },
+                            leadingIcon = { Icon(Icons.Rounded.VolumeOff, contentDescription = null) },
+                            modifier = Modifier.testTag("virtual_btn_mute")
+                        )
+                        TvSecondaryButton(
+                            text = appString(R.string.remote_btn_play_pause),
+                            onClick = { onSendVirtualKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) },
+                            leadingIcon = { Icon(Icons.Rounded.PlayArrow, contentDescription = null) },
+                            modifier = Modifier.testTag("virtual_btn_play_pause")
                         )
                     }
                 }

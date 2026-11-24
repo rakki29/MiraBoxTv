@@ -103,7 +103,8 @@
     <string name="stage_hud_input">Input: %1$s</string>
     <string name="stage_hud_rotate">Rotate 90°</string>
     <string name="stage_hud_toggle_mouse">Toggle Air-Mouse</string>
-    <string name="stage_hud_controls">HUD Controls</string>
+    <string name="stage_hud_controls">Menu / HUD</string>
+    <string name="stage_hud_exit">Exit to Home</string>
     <string name="dex_workspace_badge">DeX TV Workspace • %1$s</string>
     <string name="landscape_forced_badge">Forced Landscape 16:9</string>
     <string name="loopback_banner">Local Loopback Diagnostic Stream • UIBC &amp; Transforms Live</string>
@@ -123,11 +124,11 @@
     <string name="uibc_client_waiting">Listening on TCP %1$d</string>
 
     <!-- Key Mapping Guide -->
-    <string name="map_dpad">D-Pad Arrows → Navigate App Focus or Move Air-Mouse</string>
-    <string name="map_ok">OK / Center → Select Item or Tap Screen Coordinate</string>
-    <string name="map_back">Back → Phone Back Navigation</string>
-    <string name="map_menu">Menu / Long Back → Open TV Display &amp; DeX HUD</string>
-    <string name="map_vol">Vol + / - → Adjust Mirrored Media Volume</string>
+    <string name="map_dpad">D-Pad Arrows → Navigate Phone or Move Air-Mouse Pointer</string>
+    <string name="map_ok">OK / Center → Select Focused Item or Tap Pointer</string>
+    <string name="map_back">Back (Short) → Phone Back  |  Back (Hold) / Menu → TV HUD</string>
+    <string name="map_menu">P+ / P- → Scroll Page / Next &amp; Prev Video</string>
+    <string name="map_vol">Vol +/- &amp; Mute &amp; Play → Phone Media Audio &amp; Playback</string>
 
     <!-- Interactive Remote Pad Test -->
     <string name="remote_pad_title">Test Remote Control Forwarding</string>
@@ -139,6 +140,12 @@
     <string name="remote_btn_back">Back</string>
     <string name="remote_btn_home">Home</string>
     <string name="remote_btn_recents">Apps</string>
+    <string name="remote_btn_ch_up">P+</string>
+    <string name="remote_btn_ch_down">P-</string>
+    <string name="remote_btn_vol_up">Vol+</string>
+    <string name="remote_btn_vol_down">Vol-</string>
+    <string name="remote_btn_mute">Mute</string>
+    <string name="remote_btn_play_pause">Play/Pause</string>
 
     <!-- Network & WFD Diagnostics + Phone Sender Mode -->
     <string name="role_tv_receiver">TV Box Receiver</string>
@@ -162,11 +169,18 @@
     <string name="sender_status_connecting">Waiting for TV Remote OK Approval…</string>
     <string name="sender_status_streaming">Streaming Live to %1$s</string>
     <string name="sender_accessibility_title">Allow TV Remote to Control Phone Apps</string>
-    <string name="sender_accessibility_desc">Enable MiraBox Remote Accessibility so your TV Box remote D-Pad, OK, and Back can tap and control apps on this phone.</string>
+    <string name="sender_accessibility_desc">Enable MiraBox Remote Accessibility so your TV Box remote D-Pad, OK, P+/-, and Back can control apps on this phone.</string>
     <string name="sender_accessibility_enabled">Remote Control Accessibility Active</string>
     <string name="sender_accessibility_btn">Enable Remote Control</string>
+    <string name="sender_overlay_title">Force Horizontal Landscape on Phone Apps</string>
+    <string name="sender_overlay_desc">Allow \"Appear on top\" so MiraBox can automatically flip portrait phone apps into true 16:9 widescreen when TV DeX / Landscape mode is active.</string>
+    <string name="sender_overlay_enabled">True Horizontal Landscape Lock Ready</string>
+    <string name="sender_overlay_btn">Allow Display Overlay</string>
+    <string name="sender_audio_active">Internal TV Audio Active (PCM 48kHz)</string>
+    <string name="sender_audio_android9_limit">Android 9 blocks internal audio capture (needs Android 10+; pair Bluetooth to TV for sound)</string>
+    <string name="sender_audio_perm_missing">Microphone/Audio capture permission not granted</string>
     <string name="accessibility_service_label">MiraBox TV Remote Control</string>
-    <string name="accessibility_service_desc">Forwards TV Box remote D-Pad, Back, Home, and Air-Mouse taps from MiraBox TV Receiver onto your mirrored phone apps.</string>
+    <string name="accessibility_service_desc">Forwards TV Box remote D-Pad, OK, Back, P+/-, and Air-Mouse taps from MiraBox TV Receiver onto your mirrored phone apps.</string>
     <string name="sender_notification_title">MiraBox TV Casting Active</string>
     <string name="sender_notification_text">Mirroring phone screen to %1$s</string>
 </resources>

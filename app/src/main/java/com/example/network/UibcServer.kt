@@ -1,6 +1,7 @@
 package com.example.network
 
 import android.view.KeyEvent
+import com.example.data.DisplayMode
 import com.example.miracast.UibcTelemetry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -185,6 +186,20 @@ class UibcServer(private val scope: CoroutineScope) {
         packetQueue.trySend(QueuedPacket(buf.array(), "$typeName ($px, $py)"))
     }
 
+    fun sendDisplayMode(mode: DisplayMode) {
+        val bodyLength = 2
+        val totalLength = 4 + 3 + bodyLength
+        val buf = ByteBuffer.allocate(totalLength).order(ByteOrder.BIG_ENDIAN)
+        buf.put(0x00.toByte())
+        buf.put(0x00.toByte()) // GENERIC
+        buf.putShort(totalLength.toShort())
+        buf.put(0x50.toByte()) // Custom DisplayMode Sync IE
+        buf.putShort(bodyLength.toShort())
+        buf.put(mode.ordinal.toByte())
+        buf.put(0x00.toByte())
+        packetQueue.trySend(QueuedPacket(buf.array(), "MODE -> ${mode.name}"))
+    }
+
     fun stop() {
         acceptJob?.cancel()
         writerJob?.cancel()
@@ -207,9 +222,26 @@ class UibcServer(private val scope: CoroutineScope) {
         KeyEvent.KEYCODE_BACK -> 0x0029
         KeyEvent.KEYCODE_HOME -> 0x004A
         KeyEvent.KEYCODE_APP_SWITCH -> 0x0076
+        KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_PAGE_UP -> 0x004B
+        KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_DOWN -> 0x004E
+        KeyEvent.KEYCODE_VOLUME_MUTE -> 0x007F
         KeyEvent.KEYCODE_VOLUME_UP -> 0x0080
         KeyEvent.KEYCODE_VOLUME_DOWN -> 0x0081
-        KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> 0x00E8
+        KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+        KeyEvent.KEYCODE_MEDIA_PLAY,
+        KeyEvent.KEYCODE_MEDIA_PAUSE -> 0x00E8
+        KeyEvent.KEYCODE_MEDIA_NEXT -> 0x00EB
+        KeyEvent.KEYCODE_MEDIA_PREVIOUS -> 0x00EC
+        KeyEvent.KEYCODE_1 -> 0x001E
+        KeyEvent.KEYCODE_2 -> 0x001F
+        KeyEvent.KEYCODE_3 -> 0x0020
+        KeyEvent.KEYCODE_4 -> 0x0021
+        KeyEvent.KEYCODE_5 -> 0x0022
+        KeyEvent.KEYCODE_6 -> 0x0023
+        KeyEvent.KEYCODE_7 -> 0x0024
+        KeyEvent.KEYCODE_8 -> 0x0025
+        KeyEvent.KEYCODE_9 -> 0x0026
+        KeyEvent.KEYCODE_0 -> 0x0027
         else -> keyCode and 0xFFFF
     }
 
@@ -222,8 +254,16 @@ class UibcServer(private val scope: CoroutineScope) {
         KeyEvent.KEYCODE_BACK -> "BACK"
         KeyEvent.KEYCODE_HOME -> "HOME"
         KeyEvent.KEYCODE_APP_SWITCH -> "RECENTS"
+        KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_PAGE_UP -> "P+"
+        KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_DOWN -> "P-"
+        KeyEvent.KEYCODE_VOLUME_MUTE -> "MUTE"
         KeyEvent.KEYCODE_VOLUME_UP -> "VOL+"
         KeyEvent.KEYCODE_VOLUME_DOWN -> "VOL-"
+        KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+        KeyEvent.KEYCODE_MEDIA_PLAY,
+        KeyEvent.KEYCODE_MEDIA_PAUSE -> "PLAY/PAUSE"
+        KeyEvent.KEYCODE_MEDIA_NEXT -> "NEXT"
+        KeyEvent.KEYCODE_MEDIA_PREVIOUS -> "PREV"
         else -> KeyEvent.keyCodeToString(keyCode).removePrefix("KEYCODE_")
     }
 }

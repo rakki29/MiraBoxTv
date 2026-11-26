@@ -116,6 +116,7 @@ class ScreenCastSenderService : Service() {
         const val EXTRA_TARGET_NAME = "target_name"
         const val EXTRA_SECOND_SCREEN_PROFILE = "second_screen_profile"
         const val EXTRA_LAUNCH_TABLET_LAUNCHER = "launch_tablet_launcher"
+        const val EXTRA_LANGUAGE = "language"
 
         private const val CHANNEL_ID = "mirabox_cast_sender"
         private const val NOTIFICATION_ID = 4102
@@ -175,6 +176,7 @@ class ScreenCastSenderService : Service() {
             )
         }.getOrDefault(com.example.data.SecondScreenProfile.TABLET_720P)
         val launchTabletLauncher = intent?.getBooleanExtra(EXTRA_LAUNCH_TABLET_LAUNCHER, true) ?: true
+        val appLanguage = intent?.getStringExtra(EXTRA_LANGUAGE) ?: "ARABIC"
 
         if (resultCode != Activity.RESULT_OK || resultData == null || host.isBlank()) {
             stopSelf()
@@ -202,7 +204,8 @@ class ScreenCastSenderService : Service() {
             audioPort = audioPort,
             targetName = targetName,
             secondScreenProfile = secondScreenProfile,
-            launchTabletLauncher = launchTabletLauncher
+            launchTabletLauncher = launchTabletLauncher,
+            appLanguage = appLanguage
         )
 
         return START_NOT_STICKY
@@ -223,7 +226,8 @@ class ScreenCastSenderService : Service() {
         audioPort: Int,
         targetName: String,
         secondScreenProfile: com.example.data.SecondScreenProfile,
-        launchTabletLauncher: Boolean
+        launchTabletLauncher: Boolean,
+        appLanguage: String
     ) {
         sessionJob?.cancel()
         uibcJob?.cancel()
@@ -386,8 +390,10 @@ class ScreenCastSenderService : Service() {
                     mainHandler.post {
                         runCatching {
                             startActivity(
-                                Intent(this@ScreenCastSenderService, TabletLauncherActivity::class.java)
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                Intent(this@ScreenCastSenderService, TabletLauncherActivity::class.java).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                    putExtra(EXTRA_LANGUAGE, appLanguage)
+                                }
                             )
                         }
                     }

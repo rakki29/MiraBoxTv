@@ -12,11 +12,14 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -101,7 +104,7 @@ import kotlin.math.roundToInt
  * Attaches a hardware TextureView to MediaCodec H.264 stream with real-time Matrix rotation
  * (Forced Landscape 16:9), Android TV / Samsung DeX taskbar shell, and UIBC remote/Air-Mouse forwarding.
  */
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun MirrorStageScreen(
     uiState: MiraBoxUiState,
@@ -122,9 +125,14 @@ fun MirrorStageScreen(
     val isForcedLandscape = settings.displayMode == DisplayMode.FORCE_LANDSCAPE
     val stageFocusRequester = remember { FocusRequester() }
 
+    val hudFocusRequester = remember { FocusRequester() }
+
     LaunchedEffect(session != null, uiState.stageHudVisible) {
         if (session != null && !uiState.stageHudVisible) {
             runCatching { stageFocusRequester.requestFocus() }
+        } else if (session != null && uiState.stageHudVisible) {
+            kotlinx.coroutines.delay(60)
+            runCatching { hudFocusRequester.requestFocus() }
         }
     }
 
@@ -143,7 +151,7 @@ fun MirrorStageScreen(
             .fillMaxSize()
             .background(Color.Black)
             .focusRequester(stageFocusRequester)
-            .focusable()
+            .focusable(enabled = !uiState.stageHudVisible)
             .onPreviewKeyEvent { ev ->
                 val isDown = ev.type == KeyEventType.KeyDown
                 val isUp = ev.type == KeyEventType.KeyUp
@@ -301,14 +309,15 @@ fun MirrorStageScreen(
             Column(
                 modifier = Modifier
                     .clip(RoundedCornerShape(20.dp))
-                    .background(ObsidianCard.copy(alpha = 0.95f))
+                    .background(ObsidianCard.copy(alpha = 0.96f))
                     .border(1.5.dp, ElectricCyan.copy(alpha = 0.6f), RoundedCornerShape(20.dp))
+                    .focusGroup()
                     .padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Row(
+                FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     TvSelectableChip(
                         label = appString(R.string.mode_standard_title),
@@ -330,9 +339,9 @@ fun MirrorStageScreen(
                     )
                 }
 
-                Row(
+                FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     TvSecondaryButton(
                         text = appString(R.string.stage_hud_rotate),
@@ -360,7 +369,9 @@ fun MirrorStageScreen(
                         onClick = onDisconnect,
                         containerColor = Color(0xFFEF4444),
                         contentColor = Color.White,
-                        modifier = Modifier.testTag("hud_disconnect_button")
+                        modifier = Modifier
+                            .focusRequester(hudFocusRequester)
+                            .testTag("hud_disconnect_button")
                     )
                 }
             }

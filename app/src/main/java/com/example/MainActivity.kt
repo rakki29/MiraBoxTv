@@ -142,6 +142,10 @@ class MainActivity : ComponentActivity() {
                             ScreenCastSenderService.EXTRA_LAUNCH_TABLET_LAUNCHER,
                             uiState.settings.launchTabletLauncherOnCast
                         )
+                        putExtra(
+                            ScreenCastSenderService.EXTRA_LANGUAGE,
+                            uiState.settings.language.name
+                        )
                     }
                     ContextCompat.startForegroundService(context, intent)
                 }

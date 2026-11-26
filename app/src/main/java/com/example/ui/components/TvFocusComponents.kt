@@ -63,9 +63,7 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import java.util.Locale
 
-val LocalAppResources = compositionLocalOf<Resources> {
-    error("LocalAppResources not provided")
-}
+val LocalAppResources = compositionLocalOf<Resources?> { null }
 
 @Composable
 fun LocalizedEnvironment(
@@ -100,12 +98,14 @@ private fun createLocalizedResources(context: Context, language: AppLanguage): R
 
 @Composable
 fun appString(@StringRes id: Int): String {
-    return LocalAppResources.current.getString(id)
+    val res = LocalAppResources.current ?: LocalContext.current.resources
+    return res.getString(id)
 }
 
 @Composable
 fun appString(@StringRes id: Int, vararg formatArgs: Any): String {
-    return LocalAppResources.current.getString(id, *formatArgs)
+    val res = LocalAppResources.current ?: LocalContext.current.resources
+    return res.getString(id, *formatArgs)
 }
 
 @Composable

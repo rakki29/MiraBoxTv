@@ -59,6 +59,8 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.MainActivity
 import com.example.R
+import com.example.data.AppLanguage
+import com.example.ui.components.LocalizedEnvironment
 import com.example.ui.components.TvPrimaryButton
 import com.example.ui.components.TvSecondaryButton
 import com.example.ui.components.appString
@@ -72,7 +74,6 @@ import com.example.ui.theme.ObsidianBorder
 import com.example.ui.theme.ObsidianCard
 import com.example.ui.theme.ObsidianCardElevated
 import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -93,33 +94,38 @@ class TabletLauncherActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val language = runCatching {
+            AppLanguage.valueOf(intent?.getStringExtra(ScreenCastSenderService.EXTRA_LANGUAGE) ?: "")
+        }.getOrDefault(AppLanguage.ARABIC)
 
         setContent {
             val status by SenderRuntimeBus.status.collectAsStateWithLifecycle()
             MiraBoxTheme {
-                TabletDesktopLauncherScreen(
-                    targetName = status.targetName.ifBlank { "MiraBox TV" },
-                    secondScreenActive = status.secondScreenNote.isNotEmpty(),
-                    onLaunchApp = { pkg ->
-                        packageManager.getLaunchIntentForPackage(pkg)?.let { launchIntent ->
-                            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            runCatching { startActivity(launchIntent) }
+                LocalizedEnvironment(language = language) {
+                    TabletDesktopLauncherScreen(
+                        targetName = status.targetName.ifBlank { "MiraBox TV" },
+                        secondScreenActive = status.secondScreenNote.isNotEmpty(),
+                        onLaunchApp = { pkg ->
+                            packageManager.getLaunchIntentForPackage(pkg)?.let { launchIntent ->
+                                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                runCatching { startActivity(launchIntent) }
+                            }
+                        },
+                        onOpenMiraBox = {
+                            startActivity(
+                                Intent(this, MainActivity::class.java)
+                                    .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                            )
+                        },
+                        onStopCast = {
+                            val stopIntent = Intent(this, ScreenCastSenderService::class.java).apply {
+                                action = ScreenCastSenderService.ACTION_STOP
+                            }
+                            startService(stopIntent)
+                            finish()
                         }
-                    },
-                    onOpenMiraBox = {
-                        startActivity(
-                            Intent(this, MainActivity::class.java)
-                                .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                        )
-                    },
-                    onStopCast = {
-                        val stopIntent = Intent(this, ScreenCastSenderService::class.java).apply {
-                            action = ScreenCastSenderService.ACTION_STOP
-                        }
-                        startService(stopIntent)
-                        finish()
-                    }
-                )
+                    )
+                }
             }
         }
     }

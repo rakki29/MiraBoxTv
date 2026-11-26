@@ -165,6 +165,8 @@
     <string name="sender_manual_port_label">المنفذ</string>
     <string name="sender_btn_connect_cast">بدء البث للشاشة</string>
     <string name="sender_btn_stop_cast">إيقاف البث</string>
+    <string name="sender_btn_restore_display">إرجاع الهاتف للوضع العمودي / التلقائي</string>
+    <string name="sender_restore_done">تم إرجاع شاشة الهاتف إلى الوضع العمودي والتدوير التلقائي</string>
     <string name="sender_status_idle">جاهز للبث</string>
     <string name="sender_status_connecting">بانتظار ضغط زر OK في ريموت البوكس…</string>
     <string name="sender_status_streaming">جاري البث الحي إلى %1$s</string>
@@ -187,13 +189,16 @@
     <string name="sender_write_settings_btn">تفعيل قفل التدوير بالنظام</string>
     <string name="sender_write_settings_ok">قفل تدوير النظام مُفعّل</string>
     <string name="sender_adb_granted">تحويل الدقة و DPI التابلت على مستوى النظام مُفعّل (SecondScreen Pro)</string>
-    <string name="sender_adb_hint">اختياري لتغيير DPI كل تطبيقات سامسونج ومتصفح كروم إلى تابلت حقيقي: نفّذ هذا الأمر مرة واحدة عبر ADB</string>
+    <string name="sender_dpi_internal_only">تم تصغير واجهة التابلت داخل MiraBox تلقائياً. لتغيير DPI التطبيقات الخارجية (مثل كروم ويوتيوب)، يتطلب نظام أندرويد منح إذن ADB مرة واحدة أو تعديل «أصغر عرض» في خيارات المطور إلى 600dp.</string>
+    <string name="sender_adb_hint">لتغيير DPI كل تطبيقات النظام إلى تابلت حقيقي، نفّذ هذا الأمر مرة واحدة عبر ADB:</string>
     <string name="sender_adb_copy_btn">نسخ أمر ADB</string>
     <string name="sender_adb_copied">تم النسخ!</string>
+    <string name="sender_open_dev_settings">خيارات المطور</string>
     <string name="tablet_launcher_title">واجهة التابلت MiraBox (16:9)</string>
     <string name="tablet_launcher_subtitle">متصل بـ %1$s • تنقّل بين التطبيقات بأسهم الريموت و OK</string>
     <string name="tablet_launcher_subtitle_hd">وضع SecondScreen نشط • يبث إلى %1$s</string>
     <string name="tablet_btn_mirabox">تطبيق MiraBox</string>
+    <string name="tablet_btn_restore_exit">إيقاف وإرجاع الشاشة</string>
     <string name="sender_audio_active">بث الصوت الداخلي للتلفاز نشط (PCM 48kHz)</string>
     <string name="sender_audio_android9_limit">نظام أندرويد 9 (S8) يمنع التقاط الصوت الداخلي للتطبيقات (يتطلب أندرويد 10+؛ اربط البلوتوث بالتلفاز للصوت)</string>
     <string name="sender_audio_perm_missing">لم يتم منح إذن التقاط الصوت</string>

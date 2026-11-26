@@ -165,6 +165,8 @@
     <string name="sender_manual_port_label">Port</string>
     <string name="sender_btn_connect_cast">Start Mirroring to TV</string>
     <string name="sender_btn_stop_cast">Stop Mirroring</string>
+    <string name="sender_btn_restore_display">Restore Portrait / Auto</string>
+    <string name="sender_restore_done">Phone screen restored to upright Portrait &amp; Auto-rotate</string>
     <string name="sender_status_idle">Ready to Cast</string>
     <string name="sender_status_connecting">Waiting for TV Remote OK Approval…</string>
     <string name="sender_status_streaming">Streaming Live to %1$s</string>
@@ -187,13 +189,16 @@
     <string name="sender_write_settings_btn">Allow Rotation Lock</string>
     <string name="sender_write_settings_ok">System Rotation Lock Ready</string>
     <string name="sender_adb_granted">System Resolution &amp; Tablet DPI Enabled (SecondScreen Pro)</string>
-    <string name="sender_adb_hint">Optional for full system-wide Tablet DPI across Samsung/Chrome: run once from PC via ADB</string>
+    <string name="sender_dpi_internal_only">MiraBox Tablet Launcher uses compact Tablet DPI automatically. To shrink DPI across external apps (Chrome/YouTube), Android requires 1-time ADB permission or Developer Options → Minimum width (600dp).</string>
+    <string name="sender_adb_hint">1-time ADB command from PC for full system-wide Tablet DPI:</string>
     <string name="sender_adb_copy_btn">Copy ADB Command</string>
     <string name="sender_adb_copied">Copied!</string>
+    <string name="sender_open_dev_settings">Developer Options</string>
     <string name="tablet_launcher_title">MiraBox Tablet Desktop (16:9)</string>
     <string name="tablet_launcher_subtitle">Casting to %1$s • Navigate apps with TV Remote D-Pad &amp; OK</string>
     <string name="tablet_launcher_subtitle_hd">SecondScreen Active • Streaming to %1$s</string>
     <string name="tablet_btn_mirabox">MiraBox App</string>
+    <string name="tablet_btn_restore_exit">Restore Phone &amp; Exit</string>
     <string name="sender_audio_active">Internal TV Audio Active (PCM 48kHz)</string>
     <string name="sender_audio_android9_limit">Android 9 blocks internal audio capture (needs Android 10+; pair Bluetooth to TV for sound)</string>
     <string name="sender_audio_perm_missing">Microphone/Audio capture permission not granted</string>

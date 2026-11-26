@@ -85,9 +85,11 @@ fun PhoneSenderScreen(
     onRefreshDiscovery: () -> Unit,
     onStartCast: (host: String, rtspPort: Int, uibcPort: Int, videoPort: Int, targetName: String) -> Unit,
     onStopCast: () -> Unit,
+    onRestorePhoneDisplay: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onOpenOverlaySettings: () -> Unit,
     onOpenWriteSettings: () -> Unit,
+    onOpenDeveloperSettings: () -> Unit,
     onSetSecondScreenProfile: (SecondScreenProfile) -> Unit,
     onSetLaunchTabletLauncher: (Boolean) -> Unit,
     modifier: Modifier = Modifier
@@ -107,6 +109,7 @@ fun PhoneSenderScreen(
         mutableStateOf(SecondScreenController.hasWriteSecureSettingsPermission(context))
     }
     var adbCopied by remember { mutableStateOf(false) }
+    var restoreConfirmed by remember { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -189,6 +192,28 @@ fun PhoneSenderScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = TextSecondary
                 )
+
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TvSecondaryButton(
+                        text = appString(R.string.sender_btn_restore_display),
+                        onClick = {
+                            onRestorePhoneDisplay()
+                            restoreConfirmed = true
+                        },
+                        leadingIcon = { Icon(Icons.Rounded.ScreenRotation, contentDescription = null) },
+                        modifier = Modifier.testTag("sender_restore_display_button")
+                    )
+                }
+                if (restoreConfirmed) {
+                    Text(
+                        text = appString(R.string.sender_restore_done),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = EmeraldMint
+                    )
+                }
 
                 if (sender.state == SenderState.STREAMING) {
                     Column(
@@ -454,6 +479,11 @@ fun PhoneSenderScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
+                            text = appString(R.string.sender_dpi_internal_only),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AmberAlert
+                        )
+                        Text(
                             text = appString(R.string.sender_adb_hint),
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
@@ -463,15 +493,25 @@ fun PhoneSenderScreen(
                             style = MaterialTheme.typography.labelSmall,
                             color = ElectricCyan
                         )
-                        TvSecondaryButton(
-                            text = if (adbCopied) appString(R.string.sender_adb_copied) else appString(R.string.sender_adb_copy_btn),
-                            onClick = {
-                                clipboard.setText(AnnotatedString(SecondScreenController.adbGrantCommand(context)))
-                                adbCopied = true
-                            },
-                            leadingIcon = { Icon(Icons.Rounded.ContentCopy, contentDescription = null) },
-                            modifier = Modifier.testTag("copy_adb_secondscreen_button")
-                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            TvSecondaryButton(
+                                text = if (adbCopied) appString(R.string.sender_adb_copied) else appString(R.string.sender_adb_copy_btn),
+                                onClick = {
+                                    clipboard.setText(AnnotatedString(SecondScreenController.adbGrantCommand(context)))
+                                    adbCopied = true
+                                },
+                                leadingIcon = { Icon(Icons.Rounded.ContentCopy, contentDescription = null) },
+                                modifier = Modifier.testTag("copy_adb_secondscreen_button")
+                            )
+                            TvSecondaryButton(
+                                text = appString(R.string.sender_open_dev_settings),
+                                onClick = onOpenDeveloperSettings,
+                                modifier = Modifier.testTag("open_dev_settings_button")
+                            )
+                        }
                     }
                 }
             }

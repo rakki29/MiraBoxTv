@@ -443,6 +443,7 @@ class MiracastRtspServer(
     }
 
     fun disconnectActiveSession() {
+        uibcServer.sendDisconnectSignal()
         loopbackClientJob?.cancel()
         runCatching { activeClientSocket?.close() }
         activeClientSocket = null

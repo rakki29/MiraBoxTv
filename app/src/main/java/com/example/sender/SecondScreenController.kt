@@ -5,6 +5,8 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.Process
 import android.provider.Settings
 import android.util.DisplayMetrics
@@ -33,6 +35,8 @@ object SecondScreenController {
     private const val KEY_ORIG_USER_ROT = "orig_user_rot"
     private const val KEY_ROTATION_MODIFIED = "rot_modified"
     private const val KEY_DISPLAY_MODIFIED = "display_modified"
+
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     fun hasWriteSettingsPermission(context: Context): Boolean {
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.System.canWrite(context)
@@ -99,23 +103,61 @@ object SecondScreenController {
     }
 
     fun restoreOriginalDisplay(context: Context) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val appCtx = context.applicationContext
+        val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-        if (prefs.getBoolean(KEY_DISPLAY_MODIFIED, false) && hasWriteSecureSettingsPermission(context)) {
+        if (prefs.getBoolean(KEY_DISPLAY_MODIFIED, false) && hasWriteSecureSettingsPermission(appCtx)) {
             clearForcedDisplaySizeAndDensity()
             prefs.edit().putBoolean(KEY_DISPLAY_MODIFIED, false).apply()
         }
 
-        if (prefs.getBoolean(KEY_ROTATION_MODIFIED, false) && hasWriteSettingsPermission(context)) {
-            runCatching {
-                val cr = context.contentResolver
-                val origAccel = prefs.getInt(KEY_ORIG_ACCEL_ROT, 1)
-                val origUserRot = prefs.getInt(KEY_ORIG_USER_ROT, Surface.ROTATION_0)
-                Settings.System.putInt(cr, Settings.System.USER_ROTATION, origUserRot)
-                Settings.System.putInt(cr, Settings.System.ACCELEROMETER_ROTATION, origAccel)
-            }
+        if (prefs.getBoolean(KEY_ROTATION_MODIFIED, false) && hasWriteSettingsPermission(appCtx)) {
+            val origAccel = prefs.getInt(KEY_ORIG_ACCEL_ROT, 1)
+            val origUserRot = prefs.getInt(KEY_ORIG_USER_ROT, Surface.ROTATION_0)
+            snapToPortraitAndRestoreAccel(appCtx, targetUserRot = origUserRot, targetAccel = origAccel)
             prefs.edit().putBoolean(KEY_ROTATION_MODIFIED, false).apply()
         }
+    }
+
+    /**
+     * Unconditionally clears any forced Tablet DPI/size and snaps the phone back to Portrait + Auto-Rotate.
+     */
+    fun forceRestorePortraitAndAuto(context: Context) {
+        val appCtx = context.applicationContext
+        val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+        if (hasWriteSecureSettingsPermission(appCtx)) {
+            clearForcedDisplaySizeAndDensity()
+            prefs.edit().putBoolean(KEY_DISPLAY_MODIFIED, false).apply()
+        }
+
+        if (hasWriteSettingsPermission(appCtx)) {
+            snapToPortraitAndRestoreAccel(appCtx, targetUserRot = Surface.ROTATION_0, targetAccel = 1)
+            prefs.edit().putBoolean(KEY_ROTATION_MODIFIED, false).apply()
+        }
+    }
+
+    private fun snapToPortraitAndRestoreAccel(
+        appCtx: Context,
+        targetUserRot: Int,
+        targetAccel: Int
+    ) {
+        runCatching {
+            val cr = appCtx.contentResolver
+            // First lock rotation at 0 (Portrait) so Samsung OneUI snaps upright immediately,
+            // instead of lingering in Landscape when ACCELEROMETER_ROTATION turns back on.
+            Settings.System.putInt(cr, Settings.System.ACCELEROMETER_ROTATION, 0)
+            Settings.System.putInt(cr, Settings.System.USER_ROTATION, Surface.ROTATION_0)
+        }
+        mainHandler.postDelayed({
+            runCatching {
+                val cr = appCtx.contentResolver
+                if (targetAccel == 0) {
+                    Settings.System.putInt(cr, Settings.System.USER_ROTATION, targetUserRot)
+                }
+                Settings.System.putInt(cr, Settings.System.ACCELEROMETER_ROTATION, targetAccel)
+            }
+        }, 200L)
     }
 
     /**

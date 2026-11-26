@@ -200,6 +200,20 @@ class UibcServer(private val scope: CoroutineScope) {
         packetQueue.trySend(QueuedPacket(buf.array(), "MODE -> ${mode.name}"))
     }
 
+    fun sendDisconnectSignal() {
+        val bodyLength = 2
+        val totalLength = 4 + 3 + bodyLength
+        val buf = ByteBuffer.allocate(totalLength).order(ByteOrder.BIG_ENDIAN)
+        buf.put(0x00.toByte())
+        buf.put(0x00.toByte()) // GENERIC
+        buf.putShort(totalLength.toShort())
+        buf.put(0x51.toByte()) // Custom Disconnect Session IE
+        buf.putShort(bodyLength.toShort())
+        buf.put(0x01.toByte())
+        buf.put(0x00.toByte())
+        packetQueue.trySend(QueuedPacket(buf.array(), "DISCONNECT"))
+    }
+
     fun stop() {
         acceptJob?.cancel()
         writerJob?.cancel()

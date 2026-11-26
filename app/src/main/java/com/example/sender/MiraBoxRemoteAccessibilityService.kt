@@ -103,6 +103,11 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         dispatchTapAt(x, y)
     }
 
+    fun clearFocusHighlightOnly() {
+        selectedBounds = null
+        mainHandler.post { hideFocusHighlight() }
+    }
+
     fun executeRemoteKey(hidKeyCode: Int) {
         when (hidKeyCode) {
             0x0029 -> {
@@ -180,61 +185,116 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         }
 
         // Reached edge in this direction:
-        // - LEFT/RIGHT at page edge -> flip horizontal launcher/pager page!
+        // - LEFT/RIGHT at row/page edge -> flip horizontal launcher/pager page!
         // - UP/DOWN at top/bottom edge -> scroll vertically (défilement)!
-        val didAction = when (dir) {
+        val beforeSig = buildCandidateSignature(candidates)
+        val pagerCenterYFrac = findHorizontalPagerCenterYFrac(root, wInt, hInt)
+        var usedAccAction = false
+        var alreadySwiped = false
+
+        when (dir) {
             NavDir.RIGHT, NavDir.LEFT -> {
                 val forward = (dir == NavDir.RIGHT)
-                val accScrolled = tryScrollHorizontalPager(root, forward)
-                if (!accScrolled) {
-                    // Fallback swipe for Samsung OneUI PagedView / horizontal launchers
-                    if (forward) {
-                        performSwipe(0.82f, 0.5f, 0.18f, 0.5f, 240L)
-                    } else {
-                        performSwipe(0.18f, 0.5f, 0.82f, 0.5f, 240L)
-                    }
+                val accScrolled = tryScrollHorizontalPager(root, forward, wInt, hInt)
+                if (accScrolled) {
+                    usedAccAction = true
+                } else {
+                    alreadySwiped = true
+                    dispatchHorizontalPageSwipe(forward, pagerCenterYFrac)
                 }
-                true
             }
             NavDir.DOWN, NavDir.UP -> {
                 val forward = (dir == NavDir.DOWN)
                 val accScrolled = tryScrollVertical(root, forward)
                 if (!accScrolled) {
+                    alreadySwiped = true
                     if (forward) {
-                        performSwipe(0.5f, 0.72f, 0.5f, 0.28f, 220L)
+                        performSwipe(0.5f, 0.72f, 0.5f, 0.28f, 210L)
                     } else {
-                        performSwipe(0.5f, 0.28f, 0.5f, 0.72f, 220L)
+                        performSwipe(0.5f, 0.28f, 0.5f, 0.72f, 210L)
                     }
+                } else {
+                    usedAccAction = true
                 }
-                true
             }
         }
 
         @Suppress("DEPRECATION")
         runCatching { root.recycle() }
 
-        if (didAction) {
-            rescanAfterScroll(
-                dir = dir,
-                previous = current,
-                crossPage = (dir == NavDir.LEFT || dir == NavDir.RIGHT)
-            )
+        rescanAfterScroll(
+            dir = dir,
+            previous = current,
+            crossPage = (dir == NavDir.LEFT || dir == NavDir.RIGHT),
+            beforeSig = beforeSig,
+            usedAccAction = usedAccAction,
+            alreadySwiped = alreadySwiped,
+            pagerCenterYFrac = pagerCenterYFrac
+        )
+    }
+
+    private fun dispatchHorizontalPageSwipe(forward: Boolean, centerYFrac: Float) {
+        val y = centerYFrac.coerceIn(0.28f, 0.72f)
+        if (forward) {
+            performSwipe(0.86f, y, 0.14f, y, 190L)
+        } else {
+            performSwipe(0.14f, y, 0.86f, y, 190L)
         }
     }
 
-    private fun rescanAfterScroll(dir: NavDir, previous: Rect?, crossPage: Boolean) {
-        val delayMs = if (crossPage) 360L else 260L
+    private fun buildCandidateSignature(candidates: List<InteractiveCandidate>): String {
+        return candidates.take(10).joinToString("|") {
+            "${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}"
+        }
+    }
+
+    private fun rescanAfterScroll(
+        dir: NavDir,
+        previous: Rect?,
+        crossPage: Boolean,
+        beforeSig: String = "",
+        usedAccAction: Boolean = false,
+        alreadySwiped: Boolean = true,
+        pagerCenterYFrac: Float = 0.48f
+    ) {
+        val delayMs = if (crossPage) 320L else 250L
         mainHandler.postDelayed({
             val freshRoot = runCatching { rootInActiveWindow }.getOrNull() ?: return@postDelayed
             val (screenW, screenH) = getScreenBounds()
             val freshCandidates = collectInteractiveCandidates(freshRoot, screenW.toInt(), screenH.toInt())
+            val freshSig = buildCandidateSignature(freshCandidates)
+
+            // If Accessibility scroll returned true without visually changing the page (common on Samsung OneUI PagedView),
+            // immediately fire a real horizontal swipe gesture across the pager!
+            if (crossPage && usedAccAction && !alreadySwiped && freshSig == beforeSig) {
+                @Suppress("DEPRECATION")
+                runCatching { freshRoot.recycle() }
+                dispatchHorizontalPageSwipe(forward = (dir == NavDir.RIGHT), centerYFrac = pagerCenterYFrac)
+                rescanAfterScroll(
+                    dir = dir,
+                    previous = previous,
+                    crossPage = true,
+                    beforeSig = beforeSig,
+                    usedAccAction = false,
+                    alreadySwiped = true,
+                    pagerCenterYFrac = pagerCenterYFrac
+                )
+                return@postDelayed
+            }
+
             if (freshCandidates.isNotEmpty()) {
+                val pageActuallyChanged = beforeSig.isEmpty() || freshSig != beforeSig
                 val picked = if (crossPage) {
-                    pickOppositeEdgeCandidateAfterPageFlip(freshCandidates, dir, previous)
+                    if (pageActuallyChanged) {
+                        pickOppositeEdgeCandidateAfterPageFlip(freshCandidates, dir, previous)
+                    } else {
+                        // Already on the very first/last page — stay put cleanly on current edge item
+                        null
+                    }
                 } else {
                     if (previous != null) {
                         findBestNeighbor(previous, freshCandidates, dir)
-                            ?: pickEdgeCandidateAfterVerticalScroll(freshCandidates, dir)
+                            ?: if (pageActuallyChanged) pickEdgeCandidateAfterVerticalScroll(freshCandidates, dir) else null
                     } else {
                         pickEdgeCandidateAfterVerticalScroll(freshCandidates, dir)
                     }
@@ -337,7 +397,7 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
             val w = rect.width()
             val h = rect.height()
             val inBounds = rect.right > 0 && rect.bottom > 0 && rect.left < screenW && rect.top < screenH
-            if (!inBounds || w < 18 || h < 18) return
+            if (!inBounds || w < 34 || h < 34) return
 
             val clamped = Rect(
                 rect.left.coerceIn(0, screenW),
@@ -389,6 +449,7 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         val cy = current.exactCenterY()
         val minStepY = maxOf(28f, current.height() * 0.42f)
         val minStepX = maxOf(28f, current.width() * 0.42f)
+        val maxRowDriftY = maxOf(current.height() * 1.15f, 150f)
 
         var best: InteractiveCandidate? = null
         var bestScore = Float.MAX_VALUE
@@ -401,10 +462,13 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
             val dy = ny - cy
 
             // Strict band thresholds prevent same-row neighbors from stealing UP/DOWN
-            // and same-column neighbors from stealing LEFT/RIGHT!
+            // and prevent Dock/TopBar icons from stealing LEFT/RIGHT at the page edge!
+            val verticalOverlap = minOf(current.bottom, cand.bounds.bottom) - maxOf(current.top, cand.bounds.top)
+            val sameRowBand = verticalOverlap > 0 || abs(dy) <= maxRowDriftY
+
             val validDirection = when (dir) {
-                NavDir.RIGHT -> dx > minStepX && cand.bounds.left >= current.left + (current.width() * 0.3f)
-                NavDir.LEFT -> dx < -minStepX && cand.bounds.right <= current.right - (current.width() * 0.3f)
+                NavDir.RIGHT -> sameRowBand && dx > minStepX && cand.bounds.left >= current.left + (current.width() * 0.3f)
+                NavDir.LEFT -> sameRowBand && dx < -minStepX && cand.bounds.right <= current.right - (current.width() * 0.3f)
                 NavDir.DOWN -> dy > minStepY && cand.bounds.top >= current.top + (current.height() * 0.3f)
                 NavDir.UP -> dy < -minStepY && cand.bounds.bottom <= current.bottom - (current.height() * 0.3f)
             }
@@ -540,7 +604,50 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         return dfs(root)
     }
 
-    private fun tryScrollHorizontalPager(root: AccessibilityNodeInfo, forward: Boolean): Boolean {
+    private fun findHorizontalPagerCenterYFrac(
+        root: AccessibilityNodeInfo,
+        screenW: Int,
+        screenH: Int
+    ): Float {
+        var bestCenterY = screenH * 0.48f
+        var bestArea = 0L
+
+        fun dfs(node: AccessibilityNodeInfo) {
+            if (!node.isVisibleToUser) return
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            val cls = node.className?.toString().orEmpty()
+            val looksPager = cls.contains("Pager", ignoreCase = true) ||
+                cls.contains("Workspace", ignoreCase = true) ||
+                cls.contains("PagedView", ignoreCase = true) ||
+                cls.contains("Horizontal", ignoreCase = true)
+            if ((node.isScrollable || looksPager) &&
+                rect.width() >= screenW * 0.45f &&
+                rect.height() >= screenH * 0.25f
+            ) {
+                val area = rect.width().toLong() * rect.height().toLong()
+                if (area > bestArea) {
+                    bestArea = area
+                    bestCenterY = rect.exactCenterY()
+                }
+            }
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                dfs(child)
+                @Suppress("DEPRECATION")
+                runCatching { child.recycle() }
+            }
+        }
+        dfs(root)
+        return (bestCenterY / screenH.coerceAtLeast(1)).coerceIn(0.28f, 0.72f)
+    }
+
+    private fun tryScrollHorizontalPager(
+        root: AccessibilityNodeInfo,
+        forward: Boolean,
+        screenW: Int,
+        screenH: Int
+    ): Boolean {
         val dirAction = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (forward) AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.id
@@ -552,15 +659,20 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
 
         fun dfs(node: AccessibilityNodeInfo): Boolean {
             if (node.isVisibleToUser && node.isScrollable) {
-                val hasHorizAction = node.actionList.any { it.id == dirAction }
-                if (hasHorizAction && node.performAction(dirAction)) return true
+                val rect = Rect()
+                node.getBoundsInScreen(rect)
+                val largeEnough = rect.width() >= screenW * 0.40f && rect.height() >= screenH * 0.22f
+                if (largeEnough) {
+                    val hasHorizAction = node.actionList.any { it.id == dirAction }
+                    if (hasHorizAction && node.performAction(dirAction)) return true
 
-                val cls = node.className?.toString().orEmpty()
-                val looksPager = cls.contains("Pager", ignoreCase = true) ||
-                    cls.contains("Workspace", ignoreCase = true) ||
-                    cls.contains("PagedView", ignoreCase = true) ||
-                    cls.contains("Horizontal", ignoreCase = true)
-                if (looksPager && node.performAction(fallbackAction)) return true
+                    val cls = node.className?.toString().orEmpty()
+                    val looksPager = cls.contains("Pager", ignoreCase = true) ||
+                        cls.contains("Workspace", ignoreCase = true) ||
+                        cls.contains("PagedView", ignoreCase = true) ||
+                        cls.contains("Horizontal", ignoreCase = true)
+                    if (looksPager && node.performAction(fallbackAction)) return true
+                }
             }
             for (i in 0 until node.childCount) {
                 val child = node.getChild(i) ?: continue

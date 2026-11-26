@@ -4,10 +4,13 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -70,6 +73,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.AppLanguage
 import com.example.sender.ScreenCastSenderService
+import com.example.sender.SecondScreenController
 import com.example.ui.AppDestination
 import com.example.ui.MiraBoxUiState
 import com.example.ui.MiraBoxViewModel
@@ -190,6 +194,19 @@ class MainActivity : ComponentActivity() {
                     action = ScreenCastSenderService.ACTION_STOP
                 }
                 context.startService(intent)
+                SecondScreenController.restoreOriginalDisplay(context)
+            }
+
+            val restorePhoneDisplay: () -> Unit = {
+                val stopIntent = Intent(context, ScreenCastSenderService::class.java).apply {
+                    action = ScreenCastSenderService.ACTION_STOP
+                }
+                runCatching { context.startService(stopIntent) }
+                SecondScreenController.forceRestorePortraitAndAuto(context)
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                Handler(Looper.getMainLooper()).postDelayed({
+                    requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                }, 400L)
             }
 
             val openSystemCastSettings: () -> Unit = {
@@ -234,6 +251,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            val openDeveloperSettings: () -> Unit = {
+                runCatching {
+                    context.startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }.onFailure {
+                    runCatching {
+                        context.startActivity(
+                            Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }
+                }
+            }
+
             MiraBoxTheme {
                 LocalizedEnvironment(language = uiState.settings.language) {
                     MiraBoxAppShell(
@@ -243,9 +275,11 @@ class MainActivity : ComponentActivity() {
                         onOpenSystemCastSettings = openSystemCastSettings,
                         onStartPhoneCast = startPhoneCast,
                         onStopPhoneCast = stopPhoneCast,
+                        onRestorePhoneDisplay = restorePhoneDisplay,
                         onOpenAccessibilitySettings = openAccessibilitySettings,
                         onOpenOverlaySettings = openOverlaySettings,
-                        onOpenWriteSettings = openWriteSettings
+                        onOpenWriteSettings = openWriteSettings,
+                        onOpenDeveloperSettings = openDeveloperSettings
                     )
                 }
             }
@@ -261,9 +295,11 @@ private fun MiraBoxAppShell(
     onOpenSystemCastSettings: () -> Unit,
     onStartPhoneCast: (String, Int, Int, Int, String) -> Unit,
     onStopPhoneCast: () -> Unit,
+    onRestorePhoneDisplay: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onOpenOverlaySettings: () -> Unit,
-    onOpenWriteSettings: () -> Unit
+    onOpenWriteSettings: () -> Unit,
+    onOpenDeveloperSettings: () -> Unit
 ) {
     val isFullscreenStage =
         uiState.currentDestination == AppDestination.STAGE && uiState.activeSession != null
@@ -399,9 +435,11 @@ private fun MiraBoxAppShell(
                             onOpenSystemCastSettings = onOpenSystemCastSettings,
                             onStartPhoneCast = onStartPhoneCast,
                             onStopPhoneCast = onStopPhoneCast,
+                            onRestorePhoneDisplay = onRestorePhoneDisplay,
                             onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                             onOpenOverlaySettings = onOpenOverlaySettings,
                             onOpenWriteSettings = onOpenWriteSettings,
+                            onOpenDeveloperSettings = onOpenDeveloperSettings,
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight()
@@ -481,9 +519,11 @@ private fun MiraBoxAppShell(
                             onOpenSystemCastSettings = onOpenSystemCastSettings,
                             onStartPhoneCast = onStartPhoneCast,
                             onStopPhoneCast = onStopPhoneCast,
+                            onRestorePhoneDisplay = onRestorePhoneDisplay,
                             onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                             onOpenOverlaySettings = onOpenOverlaySettings,
                             onOpenWriteSettings = onOpenWriteSettings,
+                            onOpenDeveloperSettings = onOpenDeveloperSettings,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(innerPadding)
@@ -515,9 +555,11 @@ private fun DestinationContent(
     onOpenSystemCastSettings: () -> Unit,
     onStartPhoneCast: (String, Int, Int, Int, String) -> Unit,
     onStopPhoneCast: () -> Unit,
+    onRestorePhoneDisplay: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onOpenOverlaySettings: () -> Unit,
     onOpenWriteSettings: () -> Unit,
+    onOpenDeveloperSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     when (uiState.currentDestination) {
@@ -575,9 +617,11 @@ private fun DestinationContent(
             onRefreshDiscovery = viewModel::refreshSenderDiscovery,
             onStartCast = onStartPhoneCast,
             onStopCast = onStopPhoneCast,
+            onRestorePhoneDisplay = onRestorePhoneDisplay,
             onOpenAccessibilitySettings = onOpenAccessibilitySettings,
             onOpenOverlaySettings = onOpenOverlaySettings,
             onOpenWriteSettings = onOpenWriteSettings,
+            onOpenDeveloperSettings = onOpenDeveloperSettings,
             onSetSecondScreenProfile = viewModel::setSecondScreenProfile,
             onSetLaunchTabletLauncher = viewModel::setLaunchTabletLauncherOnCast,
             modifier = modifier

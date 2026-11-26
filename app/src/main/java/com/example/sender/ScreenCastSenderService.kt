@@ -48,8 +48,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -82,6 +85,14 @@ data class SenderRuntimeStatus(
 object SenderRuntimeBus {
     private val _status = MutableStateFlow(SenderRuntimeStatus())
     val status: StateFlow<SenderRuntimeStatus> = _status.asStateFlow()
+
+    @Volatile
+    var isTabletLauncherActive: Boolean = false
+
+    private val _tabletRemoteKeys = MutableSharedFlow<Int>(extraBufferCapacity = 32)
+    val tabletRemoteKeys: SharedFlow<Int> = _tabletRemoteKeys.asSharedFlow()
+
+    fun emitTabletKey(hidKeyCode: Int): Boolean = _tabletRemoteKeys.tryEmit(hidKeyCode)
 
     fun update(transform: (SenderRuntimeStatus) -> SenderRuntimeStatus) {
         _status.update(transform)
@@ -393,6 +404,7 @@ class ScreenCastSenderService : Service() {
                                 Intent(this@ScreenCastSenderService, TabletLauncherActivity::class.java).apply {
                                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                                     putExtra(EXTRA_LANGUAGE, appLanguage)
+                                    putExtra(EXTRA_SECOND_SCREEN_PROFILE, secondScreenProfile.name)
                                 }
                             )
                         }
@@ -446,14 +458,26 @@ class ScreenCastSenderService : Service() {
                     }
                 }
             } catch (e: Exception) {
-                SenderRuntimeBus.update {
-                    it.copy(
-                        state = SenderState.ERROR,
-                        errorMessage = e.message ?: "Connection failed"
-                    )
+                if (SenderRuntimeBus.status.value.state == SenderState.STREAMING) {
+                    // Remote TV Box closed the stream cleanly or dropped: restore cleanly
+                    SenderRuntimeBus.reset()
+                } else {
+                    SenderRuntimeBus.update {
+                        it.copy(
+                            state = SenderState.ERROR,
+                            errorMessage = e.message ?: "Connection failed"
+                        )
+                    }
                 }
             } finally {
+                if (SenderRuntimeBus.status.value.state == SenderState.STREAMING) {
+                    SenderRuntimeBus.reset()
+                }
                 cleanupResources()
+                mainHandler.post {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
             }
         }
     }
@@ -551,7 +575,8 @@ class ScreenCastSenderService : Service() {
             val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
             if (!forceLandscape || !canDrawOverlayPermission()) {
                 orientationOverlayView?.let { v ->
-                    runCatching { wm.removeView(v) }
+                    runCatching { wm.removeViewImmediate(v) }
+                        .onFailure { runCatching { wm.removeView(v) } }
                 }
                 orientationOverlayView = null
                 SenderRuntimeBus.update { it.copy(landscapeLockActive = false) }
@@ -831,6 +856,10 @@ class ScreenCastSenderService : Service() {
                                     it.copy(lastRemoteEvent = "MODE ${mode.name}")
                                 }
                             }
+                            0x51 -> { // Clean Disconnect initiated from TV Box
+                                stopCastAndSelf()
+                                break
+                            }
                         }
                     }
                 }
@@ -862,7 +891,16 @@ class ScreenCastSenderService : Service() {
             0x00E8 -> dispatchMediaKey(audioManager, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
             0x00EB -> dispatchMediaKey(audioManager, KeyEvent.KEYCODE_MEDIA_NEXT)
             0x00EC -> dispatchMediaKey(audioManager, KeyEvent.KEYCODE_MEDIA_PREVIOUS)
-            else -> acc?.executeRemoteKey(hid)
+            else -> {
+                val isTabletNavKey = hid == 0x004F || hid == 0x0050 || hid == 0x0051 ||
+                    hid == 0x0052 || hid == 0x0028 || hid == 0x0029 || hid == 0x004B || hid == 0x004E
+                if (SenderRuntimeBus.isTabletLauncherActive && isTabletNavKey) {
+                    acc?.clearFocusHighlightOnly()
+                    SenderRuntimeBus.emitTabletKey(hid)
+                } else {
+                    acc?.executeRemoteKey(hid)
+                }
+            }
         }
     }
 

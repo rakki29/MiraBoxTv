@@ -108,6 +108,9 @@ fun PhoneSenderScreen(
     var writeSecureGranted by remember {
         mutableStateOf(SecondScreenController.hasWriteSecureSettingsPermission(context))
     }
+    var displayMetricsInfo by remember {
+        mutableStateOf(SecondScreenController.getCurrentDisplayMetricsInfo(context))
+    }
     var adbCopied by remember { mutableStateOf(false) }
     var restoreConfirmed by remember { mutableStateOf(false) }
 
@@ -118,6 +121,7 @@ fun PhoneSenderScreen(
                 overlayGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
                 writeSettingsGranted = SecondScreenController.hasWriteSettingsPermission(context)
                 writeSecureGranted = SecondScreenController.hasWriteSecureSettingsPermission(context)
+                displayMetricsInfo = SecondScreenController.getCurrentDisplayMetricsInfo(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -462,6 +466,25 @@ fun PhoneSenderScreen(
                     }
                 }
 
+                // Live System Scale / smallestWidthDp indicator
+                Text(
+                    text = if (displayMetricsInfo.isTabletWidth) {
+                        appString(
+                            R.string.sender_live_dpi_tablet,
+                            displayMetricsInfo.densityDpi,
+                            displayMetricsInfo.smallestWidthDp
+                        )
+                    } else {
+                        appString(
+                            R.string.sender_live_dpi_phone,
+                            displayMetricsInfo.densityDpi,
+                            displayMetricsInfo.smallestWidthDp
+                        )
+                    },
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (displayMetricsInfo.isTabletWidth) EmeraldMint else ElectricCyan
+                )
+
                 if (writeSecureGranted) {
                     Text(
                         text = appString(R.string.sender_adb_granted),
@@ -484,6 +507,11 @@ fun PhoneSenderScreen(
                             color = AmberAlert
                         )
                         Text(
+                            text = appString(R.string.sender_no_pc_dpi_tip),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = EmeraldMint
+                        )
+                        Text(
                             text = appString(R.string.sender_adb_hint),
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
@@ -497,6 +525,11 @@ fun PhoneSenderScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            TvPrimaryButton(
+                                text = appString(R.string.sender_open_dev_settings),
+                                onClick = onOpenDeveloperSettings,
+                                modifier = Modifier.testTag("open_dev_settings_button")
+                            )
                             TvSecondaryButton(
                                 text = if (adbCopied) appString(R.string.sender_adb_copied) else appString(R.string.sender_adb_copy_btn),
                                 onClick = {
@@ -505,11 +538,6 @@ fun PhoneSenderScreen(
                                 },
                                 leadingIcon = { Icon(Icons.Rounded.ContentCopy, contentDescription = null) },
                                 modifier = Modifier.testTag("copy_adb_secondscreen_button")
-                            )
-                            TvSecondaryButton(
-                                text = appString(R.string.sender_open_dev_settings),
-                                onClick = onOpenDeveloperSettings,
-                                modifier = Modifier.testTag("open_dev_settings_button")
                             )
                         }
                     }

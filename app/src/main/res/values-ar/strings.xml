@@ -189,8 +189,11 @@
     <string name="sender_write_settings_btn">تفعيل قفل التدوير بالنظام</string>
     <string name="sender_write_settings_ok">قفل تدوير النظام مُفعّل</string>
     <string name="sender_adb_granted">تحويل الدقة و DPI التابلت على مستوى النظام مُفعّل (SecondScreen Pro)</string>
-    <string name="sender_dpi_internal_only">تم تصغير واجهة التابلت داخل MiraBox تلقائياً. لتغيير DPI التطبيقات الخارجية (مثل كروم ويوتيوب)، يتطلب نظام أندرويد منح إذن ADB مرة واحدة أو تعديل «أصغر عرض» في خيارات المطور إلى 600dp.</string>
-    <string name="sender_adb_hint">لتغيير DPI كل تطبيقات النظام إلى تابلت حقيقي، نفّذ هذا الأمر مرة واحدة عبر ADB:</string>
+    <string name="sender_live_dpi_phone">حجم النظام الحالي: %1$d DPI • العرض %2$ddp (حجم هاتف)</string>
+    <string name="sender_live_dpi_tablet">حجم النظام الحالي: %1$d DPI • العرض %2$ddp (وضع تابلت مفعّل لكل التطبيقات!)</string>
+    <string name="sender_dpi_internal_only">ملاحظة صريحة: أيقونات واجهة MiraBox تم تصغيرها لوضع التابلت، لكن نظام أندرويد يمنع أمنياً أي تطبيق غير مرخص أو بدون روت من تصغير DPI للتطبيقات الخارجية (مثل يوتيوب وكروم) تلقائياً.</string>
+    <string name="sender_no_pc_dpi_tip">الحل الفوري بدون حاسوب (10 ثوانٍ): اضغط زر «خيارات المطور» أسفله ← ابحث عن «أصغر عرض» (Minimum width) ← اكتب 700 وموافق. فوراً ستتحول كل التطبيقات لوضع التابلت! (وأعده لـ 360 بعد الانتهاء).</string>
+    <string name="sender_adb_hint">أو لتصغير DPI تلقائياً عند كل بث عبر الحاسوب (مرة واحدة فقط بـ ADB):</string>
     <string name="sender_adb_copy_btn">نسخ أمر ADB</string>
     <string name="sender_adb_copied">تم النسخ!</string>
     <string name="sender_open_dev_settings">خيارات المطور</string>

@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -104,6 +105,23 @@ private data class PendingCastTarget(
 )
 
 class MainActivity : ComponentActivity() {
+
+    private var activeViewModel: MiraBoxViewModel? = null
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val vm = activeViewModel
+        val action = event.action
+        if (vm != null &&
+            (action == KeyEvent.ACTION_DOWN || action == KeyEvent.ACTION_UP) &&
+            vm.shouldInterceptStageKeyInActivity(event.keyCode)
+        ) {
+            if (vm.handleStageRemoteKey(event.keyCode, action == KeyEvent.ACTION_DOWN, event.repeatCount)) {
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -112,6 +130,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val context = LocalContext.current
             val viewModel: MiraBoxViewModel = viewModel()
+            activeViewModel = viewModel
             val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
             var pendingCastTarget by remember { mutableStateOf<PendingCastTarget?>(null) }

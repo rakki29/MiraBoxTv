@@ -22,6 +22,12 @@ data class SecondScreenApplyResult(
     val description: String = ""
 )
 
+data class DisplayMetricsInfo(
+    val densityDpi: Int,
+    val smallestWidthDp: Int,
+    val isTabletWidth: Boolean
+)
+
 /**
  * Implements genuine SecondScreen-style system display transformation on the Phone Sender:
  * 1. Rotation lock via WRITE_SETTINGS (no ADB required, 1-tap system permission)
@@ -35,8 +41,21 @@ object SecondScreenController {
     private const val KEY_ORIG_USER_ROT = "orig_user_rot"
     private const val KEY_ROTATION_MODIFIED = "rot_modified"
     private const val KEY_DISPLAY_MODIFIED = "display_modified"
+    private const val KEY_ROOT_MODIFIED = "root_modified"
 
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    fun getCurrentDisplayMetricsInfo(context: Context): DisplayMetricsInfo {
+        val cfg = context.resources.configuration
+        val dm = context.resources.displayMetrics
+        val sw = cfg.smallestScreenWidthDp
+        val dpi = dm.densityDpi
+        return DisplayMetricsInfo(
+            densityDpi = dpi,
+            smallestWidthDp = sw,
+            isTabletWidth = sw >= 600
+        )
+    }
 
     fun hasWriteSettingsPermission(context: Context): Boolean {
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.System.canWrite(context)
@@ -81,12 +100,23 @@ object SecondScreenController {
             }
         }
 
-        // 2. Forced Tablet Resolution & DPI (WRITE_SECURE_SETTINGS)
-        if (profile != SecondScreenProfile.OFF && hasWriteSecureSettingsPermission(context)) {
+        // 2. Forced Tablet Resolution & DPI (WRITE_SECURE_SETTINGS or Root su fallback)
+        if (profile != SecondScreenProfile.OFF) {
             val (natW, natH) = resolveNaturalDimensionsForDevice(context, profile.width, profile.height)
-            appliedResDpi = applyForcedDisplaySizeAndDensity(natW, natH, profile.dpi)
-            if (appliedResDpi) {
-                prefs.edit().putBoolean(KEY_DISPLAY_MODIFIED, true).apply()
+            if (hasWriteSecureSettingsPermission(context)) {
+                appliedResDpi = applyForcedDisplaySizeAndDensity(natW, natH, profile.dpi)
+                if (appliedResDpi) {
+                    prefs.edit()
+                        .putBoolean(KEY_DISPLAY_MODIFIED, true)
+                        .putBoolean(KEY_ROOT_MODIFIED, false)
+                        .apply()
+                }
+            } else if (applyViaRootShell(natW, natH, profile.dpi)) {
+                appliedResDpi = true
+                prefs.edit()
+                    .putBoolean(KEY_DISPLAY_MODIFIED, true)
+                    .putBoolean(KEY_ROOT_MODIFIED, true)
+                    .apply()
             }
         }
 
@@ -106,9 +136,17 @@ object SecondScreenController {
         val appCtx = context.applicationContext
         val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-        if (prefs.getBoolean(KEY_DISPLAY_MODIFIED, false) && hasWriteSecureSettingsPermission(appCtx)) {
-            clearForcedDisplaySizeAndDensity()
-            prefs.edit().putBoolean(KEY_DISPLAY_MODIFIED, false).apply()
+        if (prefs.getBoolean(KEY_DISPLAY_MODIFIED, false)) {
+            if (hasWriteSecureSettingsPermission(appCtx)) {
+                clearForcedDisplaySizeAndDensity()
+                prefs.edit().putBoolean(KEY_DISPLAY_MODIFIED, false).apply()
+            } else if (prefs.getBoolean(KEY_ROOT_MODIFIED, false)) {
+                clearViaRootShell()
+                prefs.edit()
+                    .putBoolean(KEY_DISPLAY_MODIFIED, false)
+                    .putBoolean(KEY_ROOT_MODIFIED, false)
+                    .apply()
+            }
         }
 
         if (prefs.getBoolean(KEY_ROTATION_MODIFIED, false) && hasWriteSettingsPermission(appCtx)) {
@@ -129,6 +167,12 @@ object SecondScreenController {
         if (hasWriteSecureSettingsPermission(appCtx)) {
             clearForcedDisplaySizeAndDensity()
             prefs.edit().putBoolean(KEY_DISPLAY_MODIFIED, false).apply()
+        } else if (prefs.getBoolean(KEY_ROOT_MODIFIED, false) || hasSuBinary()) {
+            clearViaRootShell()
+            prefs.edit()
+                .putBoolean(KEY_DISPLAY_MODIFIED, false)
+                .putBoolean(KEY_ROOT_MODIFIED, false)
+                .apply()
         }
 
         if (hasWriteSettingsPermission(appCtx)) {
@@ -246,5 +290,39 @@ object SecondScreenController {
                 }
             }
         }
+    }
+
+    private fun hasSuBinary(): Boolean {
+        val paths = arrayOf("/system/bin/su", "/system/xbin/su", "/sbin/su", "/su/bin/su")
+        return paths.any { java.io.File(it).exists() }
+    }
+
+    private fun applyViaRootShell(width: Int, height: Int, dpi: Int): Boolean {
+        if (!hasSuBinary()) return false
+        return runSuCommand("wm size ${width}x${height} && wm density $dpi")
+    }
+
+    private fun clearViaRootShell(): Boolean {
+        if (!hasSuBinary()) return false
+        return runSuCommand("wm size reset && wm density reset")
+    }
+
+    private fun runSuCommand(cmd: String): Boolean {
+        return runCatching {
+            val proc = ProcessBuilder("su", "-c", cmd)
+                .redirectErrorStream(true)
+                .start()
+            val finished = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                proc.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
+            } else {
+                proc.waitFor() == 0
+            }
+            if (!finished) {
+                proc.destroy()
+                false
+            } else {
+                proc.exitValue() == 0
+            }
+        }.getOrDefault(false)
     }
 }

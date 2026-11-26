@@ -49,7 +49,8 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
     private data class InteractiveCandidate(
         val bounds: Rect,
         val isClickable: Boolean,
-        val area: Long
+        val area: Long,
+        val label: String
     )
 
     override fun onServiceConnected() {
@@ -189,62 +190,91 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         // - UP/DOWN at top/bottom edge -> scroll vertically (défilement)!
         val beforeSig = buildCandidateSignature(candidates)
         val pagerCenterYFrac = findHorizontalPagerCenterYFrac(root, wInt, hInt)
-        var usedAccAction = false
-        var alreadySwiped = false
 
         when (dir) {
             NavDir.RIGHT, NavDir.LEFT -> {
                 val forward = (dir == NavDir.RIGHT)
                 val accScrolled = tryScrollHorizontalPager(root, forward, wInt, hInt)
+                @Suppress("DEPRECATION")
+                runCatching { root.recycle() }
                 if (accScrolled) {
-                    usedAccAction = true
+                    rescanAfterScroll(
+                        dir = dir,
+                        previous = current,
+                        crossPage = true,
+                        beforeSig = beforeSig,
+                        usedAccAction = true,
+                        alreadySwiped = false,
+                        pagerCenterYFrac = pagerCenterYFrac,
+                        delayMs = 340L
+                    )
                 } else {
-                    alreadySwiped = true
-                    dispatchHorizontalPageSwipe(forward, pagerCenterYFrac)
+                    dispatchHorizontalPageSwipe(forward, pagerCenterYFrac) {
+                        rescanAfterScroll(
+                            dir = dir,
+                            previous = current,
+                            crossPage = true,
+                            beforeSig = beforeSig,
+                            usedAccAction = false,
+                            alreadySwiped = true,
+                            pagerCenterYFrac = pagerCenterYFrac,
+                            delayMs = 220L
+                        )
+                    }
                 }
             }
             NavDir.DOWN, NavDir.UP -> {
                 val forward = (dir == NavDir.DOWN)
                 val accScrolled = tryScrollVertical(root, forward)
-                if (!accScrolled) {
-                    alreadySwiped = true
-                    if (forward) {
-                        performSwipe(0.5f, 0.72f, 0.5f, 0.28f, 210L)
-                    } else {
-                        performSwipe(0.5f, 0.28f, 0.5f, 0.72f, 210L)
-                    }
+                @Suppress("DEPRECATION")
+                runCatching { root.recycle() }
+                if (accScrolled) {
+                    rescanAfterScroll(
+                        dir = dir,
+                        previous = current,
+                        crossPage = false,
+                        beforeSig = beforeSig,
+                        usedAccAction = true,
+                        alreadySwiped = false,
+                        pagerCenterYFrac = pagerCenterYFrac,
+                        delayMs = 250L
+                    )
                 } else {
-                    usedAccAction = true
+                    val startY = if (forward) 0.72f else 0.28f
+                    val endY = if (forward) 0.28f else 0.72f
+                    performSwipe(0.5f, startY, 0.5f, endY, 240L) {
+                        rescanAfterScroll(
+                            dir = dir,
+                            previous = current,
+                            crossPage = false,
+                            beforeSig = beforeSig,
+                            usedAccAction = false,
+                            alreadySwiped = true,
+                            pagerCenterYFrac = pagerCenterYFrac,
+                            delayMs = 180L
+                        )
+                    }
                 }
             }
         }
-
-        @Suppress("DEPRECATION")
-        runCatching { root.recycle() }
-
-        rescanAfterScroll(
-            dir = dir,
-            previous = current,
-            crossPage = (dir == NavDir.LEFT || dir == NavDir.RIGHT),
-            beforeSig = beforeSig,
-            usedAccAction = usedAccAction,
-            alreadySwiped = alreadySwiped,
-            pagerCenterYFrac = pagerCenterYFrac
-        )
     }
 
-    private fun dispatchHorizontalPageSwipe(forward: Boolean, centerYFrac: Float) {
+    private fun dispatchHorizontalPageSwipe(
+        forward: Boolean,
+        centerYFrac: Float,
+        onFinished: (() -> Unit)? = null
+    ) {
         val y = centerYFrac.coerceIn(0.28f, 0.72f)
         if (forward) {
-            performSwipe(0.86f, y, 0.14f, y, 190L)
+            performSwipe(0.80f, y, 0.20f, y, 320L, onFinished)
         } else {
-            performSwipe(0.14f, y, 0.86f, y, 190L)
+            performSwipe(0.20f, y, 0.80f, y, 320L, onFinished)
         }
     }
 
     private fun buildCandidateSignature(candidates: List<InteractiveCandidate>): String {
-        return candidates.take(10).joinToString("|") {
-            "${it.bounds.left},${it.bounds.top},${it.bounds.right},${it.bounds.bottom}"
+        return candidates.take(16).joinToString("|") {
+            "${it.label}@${it.bounds.left},${it.bounds.top}"
         }
     }
 
@@ -255,9 +285,9 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         beforeSig: String = "",
         usedAccAction: Boolean = false,
         alreadySwiped: Boolean = true,
-        pagerCenterYFrac: Float = 0.48f
+        pagerCenterYFrac: Float = 0.48f,
+        delayMs: Long = if (crossPage) 320L else 250L
     ) {
-        val delayMs = if (crossPage) 320L else 250L
         mainHandler.postDelayed({
             val freshRoot = runCatching { rootInActiveWindow }.getOrNull() ?: return@postDelayed
             val (screenW, screenH) = getScreenBounds()
@@ -265,20 +295,22 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
             val freshSig = buildCandidateSignature(freshCandidates)
 
             // If Accessibility scroll returned true without visually changing the page (common on Samsung OneUI PagedView),
-            // immediately fire a real horizontal swipe gesture across the pager!
+            // immediately fire a real horizontal swipe gesture across the pager and rescan after completion!
             if (crossPage && usedAccAction && !alreadySwiped && freshSig == beforeSig) {
                 @Suppress("DEPRECATION")
                 runCatching { freshRoot.recycle() }
-                dispatchHorizontalPageSwipe(forward = (dir == NavDir.RIGHT), centerYFrac = pagerCenterYFrac)
-                rescanAfterScroll(
-                    dir = dir,
-                    previous = previous,
-                    crossPage = true,
-                    beforeSig = beforeSig,
-                    usedAccAction = false,
-                    alreadySwiped = true,
-                    pagerCenterYFrac = pagerCenterYFrac
-                )
+                dispatchHorizontalPageSwipe(forward = (dir == NavDir.RIGHT), centerYFrac = pagerCenterYFrac) {
+                    rescanAfterScroll(
+                        dir = dir,
+                        previous = previous,
+                        crossPage = true,
+                        beforeSig = beforeSig,
+                        usedAccAction = false,
+                        alreadySwiped = true,
+                        pagerCenterYFrac = pagerCenterYFrac,
+                        delayMs = 220L
+                    )
+                }
                 return@postDelayed
             }
 
@@ -423,7 +455,8 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
 
             val notHugeContainer = area < (screenArea * 0.42f).toLong()
             if (interactive && notHugeContainer && (!addedInteractiveChild || area < (screenArea * 0.14f).toLong())) {
-                raw.add(InteractiveCandidate(clamped, node.isClickable || hasClickAction, area))
+                val label = extractNodeLabel(node)
+                raw.add(InteractiveCandidate(clamped, node.isClickable || hasClickAction, area, label))
             }
         }
 
@@ -440,6 +473,21 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         return deduped
     }
 
+    private fun extractNodeLabel(node: AccessibilityNodeInfo, depth: Int = 0): String {
+        val own = node.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+            ?: node.contentDescription?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+        if (own != null) return own.take(28)
+        if (depth >= 2) return ""
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val childLabel = extractNodeLabel(child, depth + 1)
+            @Suppress("DEPRECATION")
+            runCatching { child.recycle() }
+            if (childLabel.isNotEmpty()) return childLabel
+        }
+        return ""
+    }
+
     private fun findBestNeighbor(
         current: Rect,
         candidates: List<InteractiveCandidate>,
@@ -449,7 +497,7 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         val cy = current.exactCenterY()
         val minStepY = maxOf(28f, current.height() * 0.42f)
         val minStepX = maxOf(28f, current.width() * 0.42f)
-        val maxRowDriftY = maxOf(current.height() * 1.15f, 150f)
+        val maxRowDriftY = maxOf(current.height() * 0.65f, 95f)
 
         var best: InteractiveCandidate? = null
         var bestScore = Float.MAX_VALUE
@@ -461,10 +509,9 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
             val dx = nx - cx
             val dy = ny - cy
 
-            // Strict band thresholds prevent same-row neighbors from stealing UP/DOWN
-            // and prevent Dock/TopBar icons from stealing LEFT/RIGHT at the page edge!
-            val verticalOverlap = minOf(current.bottom, cand.bounds.bottom) - maxOf(current.top, cand.bounds.top)
-            val sameRowBand = verticalOverlap > 0 || abs(dy) <= maxRowDriftY
+            // Strict band thresholds keep LEFT/RIGHT constrained to the current icon row
+            // so tall widgets/docks never capture edge presses that should flip the launcher page.
+            val sameRowBand = abs(dy) <= maxRowDriftY
 
             val validDirection = when (dir) {
                 NavDir.RIGHT -> sameRowBand && dx > minStepX && cand.bounds.left >= current.left + (current.width() * 0.3f)
@@ -671,7 +718,22 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
                         cls.contains("Workspace", ignoreCase = true) ||
                         cls.contains("PagedView", ignoreCase = true) ||
                         cls.contains("Horizontal", ignoreCase = true)
-                    if (looksPager && node.performAction(fallbackAction)) return true
+                    val supportsVerticalOnly = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        val hasVert = node.actionList.any {
+                            it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id ||
+                                it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id
+                        }
+                        val anyHoriz = node.actionList.any {
+                            it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id ||
+                                it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.id
+                        }
+                        hasVert && !anyHoriz
+                    } else {
+                        false
+                    }
+                    if ((looksPager || !supportsVerticalOnly) && node.performAction(fallbackAction)) {
+                        return true
+                    }
                 }
             }
             for (i in 0 until node.childCount) {
@@ -857,14 +919,37 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
     }
 
-    private fun performSwipe(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long) {
+    private fun performSwipe(
+        x1: Float,
+        y1: Float,
+        x2: Float,
+        y2: Float,
+        durationMs: Long,
+        onFinished: (() -> Unit)? = null
+    ) {
         val (w, h) = getScreenBounds()
         val path = Path().apply {
             moveTo(x1 * w, y1 * h)
             lineTo(x2 * w, y2 * h)
         }
         val stroke = GestureDescription.StrokeDescription(path, 0L, durationMs)
-        dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+        val callback = if (onFinished != null) {
+            object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) {
+                    mainHandler.post { onFinished() }
+                }
+
+                override fun onCancelled(gestureDescription: GestureDescription?) {
+                    mainHandler.post { onFinished() }
+                }
+            }
+        } else {
+            null
+        }
+        val accepted = dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), callback, null)
+        if (!accepted && onFinished != null) {
+            mainHandler.post { onFinished() }
+        }
     }
 
     @Suppress("DEPRECATION")

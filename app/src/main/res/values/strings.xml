@@ -189,8 +189,11 @@
     <string name="sender_write_settings_btn">Allow Rotation Lock</string>
     <string name="sender_write_settings_ok">System Rotation Lock Ready</string>
     <string name="sender_adb_granted">System Resolution &amp; Tablet DPI Enabled (SecondScreen Pro)</string>
-    <string name="sender_dpi_internal_only">MiraBox Tablet Launcher uses compact Tablet DPI automatically. To shrink DPI across external apps (Chrome/YouTube), Android requires 1-time ADB permission or Developer Options → Minimum width (600dp).</string>
-    <string name="sender_adb_hint">1-time ADB command from PC for full system-wide Tablet DPI:</string>
+    <string name="sender_live_dpi_phone">Current System Scale: %1$d DPI • Width %2$ddp (Phone UI)</string>
+    <string name="sender_live_dpi_tablet">Current System Scale: %1$d DPI • Width %2$ddp (Tablet UI Active!)</string>
+    <string name="sender_dpi_internal_only">MiraBox Tablet Launcher scales its own app grid to Tablet DPI. For external apps (Chrome, YouTube) without Root, Android blocks apps from changing system DPI directly.</string>
+    <string name="sender_no_pc_dpi_tip">Without a PC: Tap \"Developer Options\" below → scroll to \"Minimum width\" → set 700 (all phone apps instantly switch to Tablet layout!). Set back to 360 when done.</string>
+    <string name="sender_adb_hint">Or run this 1-time ADB command from PC for automatic switching:</string>
     <string name="sender_adb_copy_btn">Copy ADB Command</string>
     <string name="sender_adb_copied">Copied!</string>
     <string name="sender_open_dev_settings">Developer Options</string>

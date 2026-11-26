@@ -127,8 +127,9 @@ fun MirrorStageScreen(
 
     val hudFocusRequester = remember { FocusRequester() }
 
-    LaunchedEffect(session != null, uiState.stageHudVisible) {
-        if (session != null && !uiState.stageHudVisible) {
+    LaunchedEffect(session != null, uiState.pendingRequest == null, uiState.stageHudVisible) {
+        if (session != null && uiState.pendingRequest == null && !uiState.stageHudVisible) {
+            kotlinx.coroutines.delay(100)
             runCatching { stageFocusRequester.requestFocus() }
         } else if (session != null && uiState.stageHudVisible) {
             kotlinx.coroutines.delay(60)

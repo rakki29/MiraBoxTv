@@ -313,6 +313,20 @@ class MiraBoxViewModel(application: Application) : AndroidViewModel(application)
 
     private var lastDpadRepeatMs: Long = 0L
 
+    fun shouldInterceptStageKeyInActivity(keyCode: Int): Boolean {
+        val state = uiState.value
+        val onStage = state.currentDestination == AppDestination.STAGE &&
+            state.activeSession != null &&
+            state.pendingRequest == null
+        if (!onStage) return false
+        if (!state.stageHudVisible) return true
+        return keyCode == KeyEvent.KEYCODE_MENU ||
+            keyCode == KeyEvent.KEYCODE_INFO ||
+            keyCode == KeyEvent.KEYCODE_SETTINGS ||
+            keyCode == KeyEvent.KEYCODE_GUIDE ||
+            keyCode == KeyEvent.KEYCODE_BACK
+    }
+
     /**
      * Handles TV Box Remote Control input while on the Mirror Stage.
      * Separates TV HUD navigation from Phone UIBC injection with zero button overlap.

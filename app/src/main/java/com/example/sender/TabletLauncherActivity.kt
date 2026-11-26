@@ -46,6 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -134,6 +135,7 @@ class TabletLauncherActivity : ComponentActivity() {
                     TabletDesktopLauncherScreen(
                         targetName = status.targetName.ifBlank { "MiraBox TV" },
                         secondScreenActive = status.secondScreenNote.isNotEmpty(),
+                        lastRemoteEvent = status.lastRemoteEvent,
                         profile = profile,
                         onLaunchApp = { pkg ->
                             packageManager.getLaunchIntentForPackage(pkg)?.let { launchIntent ->
@@ -154,6 +156,11 @@ class TabletLauncherActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        SenderRuntimeBus.isTabletLauncherActive = true
     }
 
     override fun onResume() {
@@ -214,6 +221,7 @@ class TabletLauncherActivity : ComponentActivity() {
 private fun TabletDesktopLauncherScreen(
     targetName: String,
     secondScreenActive: Boolean,
+    lastRemoteEvent: String,
     profile: SecondScreenProfile,
     onLaunchApp: (String) -> Unit,
     onOpenMiraBox: () -> Unit,
@@ -245,6 +253,10 @@ private fun TabletDesktopLauncherScreen(
     var columnCount by remember { mutableIntStateOf(6) }
     val gridState = rememberLazyGridState()
 
+    val currentApps by rememberUpdatedState(apps)
+    val currentCols by rememberUpdatedState(columnCount)
+    val currentIsRtl by rememberUpdatedState(isRtl)
+
     LaunchedEffect(Unit) {
         apps = withContext(Dispatchers.IO) {
             loadLaunchableApps(context.packageManager, context.packageName)
@@ -260,10 +272,11 @@ private fun TabletDesktopLauncherScreen(
         }
     }
 
-    LaunchedEffect(isRtl, apps.size, columnCount) {
+    LaunchedEffect(Unit) {
         SenderRuntimeBus.tabletRemoteKeys.collect { hid ->
-            val cols = columnCount.coerceAtLeast(1)
-            val totalApps = apps.size
+            val list = currentApps
+            val cols = currentCols.coerceAtLeast(1)
+            val totalApps = list.size
             if (totalApps == 0) {
                 when (hid) {
                     0x004F, 0x0050 -> topBarFocusIndex = (topBarFocusIndex + 1) % 2
@@ -288,8 +301,8 @@ private fun TabletDesktopLauncherScreen(
                     0x0029 -> onOpenMiraBox()
                 }
             } else {
-                val visualRightDelta = if (isRtl) -1 else 1
-                val visualLeftDelta = if (isRtl) 1 else -1
+                val visualRightDelta = if (currentIsRtl) -1 else 1
+                val visualLeftDelta = if (currentIsRtl) 1 else -1
                 when (hid) {
                     0x004F -> { // RIGHT
                         selectedAppIndex = (selectedAppIndex + visualRightDelta).coerceIn(0, totalApps - 1)
@@ -315,7 +328,7 @@ private fun TabletDesktopLauncherScreen(
                     }
                     0x0028 -> { // OK -> Launch Highlighted App!
                         val safe = selectedAppIndex.coerceIn(0, totalApps - 1)
-                        onLaunchApp(apps[safe].packageName)
+                        onLaunchApp(list[safe].packageName)
                     }
                     0x0029 -> { // BACK -> Jump to Top Bar (easy stop/exit)
                         inTopBar = true
@@ -436,8 +449,8 @@ private fun TabletDesktopLauncherScreen(
                                     if (isFocused) ElectricCyanContainer else ObsidianCardElevated.copy(alpha = 0.88f)
                                 )
                                 .border(
-                                    width = if (isFocused) 2.5.dp else 1.dp,
-                                    color = if (isFocused) ElectricCyan else ObsidianBorder,
+                                    width = if (isFocused) 3.5.dp else 1.dp,
+                                    color = if (isFocused) Color.White else ObsidianBorder,
                                     shape = RoundedCornerShape(14.dp)
                                 )
                                 .clickable {
@@ -469,6 +482,39 @@ private fun TabletDesktopLauncherScreen(
                         }
                     }
                 }
+            }
+
+            // Bottom TV Focus & Remote Telemetry Strip
+            val selectedLabel = if (!inTopBar && apps.isNotEmpty()) {
+                apps[selectedAppIndex.coerceIn(0, apps.lastIndex)].label
+            } else if (topBarFocusIndex == 0) {
+                appString(R.string.tablet_btn_mirabox)
+            } else {
+                appString(R.string.tablet_btn_restore_exit)
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(ObsidianCard.copy(alpha = 0.88f))
+                    .border(1.dp, ObsidianBorder, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "OK → $selectedLabel",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = ElectricCyan,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "${apps.size} apps • $lastRemoteEvent",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = EmeraldMint
+                )
             }
         }
     }

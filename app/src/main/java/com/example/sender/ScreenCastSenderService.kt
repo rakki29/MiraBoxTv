@@ -47,13 +47,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -89,10 +89,10 @@ object SenderRuntimeBus {
     @Volatile
     var isTabletLauncherActive: Boolean = false
 
-    private val _tabletRemoteKeys = MutableSharedFlow<Int>(extraBufferCapacity = 32)
-    val tabletRemoteKeys: SharedFlow<Int> = _tabletRemoteKeys.asSharedFlow()
+    private val tabletKeyChannel = Channel<Int>(capacity = Channel.UNLIMITED)
+    val tabletRemoteKeys: Flow<Int> = tabletKeyChannel.receiveAsFlow()
 
-    fun emitTabletKey(hidKeyCode: Int): Boolean = _tabletRemoteKeys.tryEmit(hidKeyCode)
+    fun emitTabletKey(hidKeyCode: Int): Boolean = tabletKeyChannel.trySend(hidKeyCode).isSuccess
 
     fun update(transform: (SenderRuntimeStatus) -> SenderRuntimeStatus) {
         _status.update(transform)
@@ -797,71 +797,82 @@ class ScreenCastSenderService : Service() {
 
     private fun startUibcReceiver(host: String, uibcPort: Int) {
         uibcJob = serviceScope.launch {
-            runCatching {
-                val sock = connectWithRetry(host, uibcPort, connectTimeoutMs = 5000)
-                uibcSocket = sock
-                val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-                val dis = DataInputStream(BufferedInputStream(sock.getInputStream()))
-                while (isActive && !sock.isClosed) {
-                    dis.readByte() // version/flags
-                    dis.readByte() // category
-                    val totalLen = dis.readUnsignedShort()
-                    val bodyLen = (totalLen - 4).coerceAtLeast(0)
-                    if (bodyLen <= 0 || bodyLen > 512) break
-                    val body = ByteArray(bodyLen)
-                    dis.readFully(body)
-                    if (body.size >= 4) {
-                        val ieId = body[0].toInt() and 0xFF
-                        val acc = MiraBoxRemoteAccessibilityService.instance
-                        when (ieId) {
-                            3 -> { // KeyDown
-                                if (body.size >= 6) {
-                                    val hid = ((body[4].toInt() and 0xFF) shl 8) or
-                                        (body[5].toInt() and 0xFF)
-                                    handleRemoteHidKey(hid, audioManager, acc)
-                                    SenderRuntimeBus.update {
-                                        it.copy(
-                                            uibcEventsExecuted = it.uibcEventsExecuted + 1,
-                                            lastRemoteEvent = "KEY 0x%04X".format(hid)
-                                        )
-                                    }
-                                }
-                            }
-                            0, 2 -> { // TouchDown (0) or Cursor Move (2)
-                                if (body.size >= 9) {
-                                    val px = ((body[5].toInt() and 0xFF) shl 8) or
-                                        (body[6].toInt() and 0xFF)
-                                    val py = ((body[7].toInt() and 0xFF) shl 8) or
-                                        (body[8].toInt() and 0xFF)
-                                    val normX = (px.toFloat() / 1920f).coerceIn(0f, 1f)
-                                    val normY = (py.toFloat() / 1080f).coerceIn(0f, 1f)
-                                    if (ieId == 0) {
-                                        acc?.executeRemoteTap(normX, normY)
+            val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            while (isActive && sessionJob?.isActive == true) {
+                var sock: Socket? = null
+                try {
+                    sock = connectWithRetry(host, uibcPort, connectTimeoutMs = 5000)
+                    uibcSocket = sock
+                    val dis = DataInputStream(BufferedInputStream(sock.getInputStream()))
+                    while (isActive && !sock.isClosed) {
+                        dis.readByte() // version/flags
+                        dis.readByte() // category
+                        val totalLen = dis.readUnsignedShort()
+                        val bodyLen = (totalLen - 4).coerceAtLeast(0)
+                        if (bodyLen <= 0 || bodyLen > 512) break
+                        val body = ByteArray(bodyLen)
+                        dis.readFully(body)
+                        if (body.size >= 4) {
+                            val ieId = body[0].toInt() and 0xFF
+                            val acc = MiraBoxRemoteAccessibilityService.instance
+                            when (ieId) {
+                                3 -> { // KeyDown
+                                    if (body.size >= 6) {
+                                        val hid = ((body[4].toInt() and 0xFF) shl 8) or
+                                            (body[5].toInt() and 0xFF)
+                                        handleRemoteHidKey(hid, audioManager, acc)
                                         SenderRuntimeBus.update {
                                             it.copy(
                                                 uibcEventsExecuted = it.uibcEventsExecuted + 1,
-                                                lastRemoteEvent = "TAP ($px, $py)"
+                                                lastRemoteEvent = "KEY 0x%04X".format(hid)
                                             )
                                         }
-                                    } else {
-                                        acc?.updateRemoteCursor(normX, normY)
                                     }
                                 }
-                            }
-                            0x50 -> { // Live DisplayMode Sync from TV Box
-                                val ord = body[3].toInt() and 0xFF
-                                val mode = DisplayMode.entries.getOrNull(ord) ?: DisplayMode.DEX_TV_DESKTOP
-                                applyPhoneLandscapeLock(mode != DisplayMode.STANDARD_MIRROR)
-                                SenderRuntimeBus.update {
-                                    it.copy(lastRemoteEvent = "MODE ${mode.name}")
+                                0, 2 -> { // TouchDown (0) or Cursor Move (2)
+                                    if (body.size >= 9) {
+                                        val px = ((body[5].toInt() and 0xFF) shl 8) or
+                                            (body[6].toInt() and 0xFF)
+                                        val py = ((body[7].toInt() and 0xFF) shl 8) or
+                                            (body[8].toInt() and 0xFF)
+                                        val normX = (px.toFloat() / 1920f).coerceIn(0f, 1f)
+                                        val normY = (py.toFloat() / 1080f).coerceIn(0f, 1f)
+                                        if (ieId == 0) {
+                                            acc?.executeRemoteTap(normX, normY)
+                                            SenderRuntimeBus.update {
+                                                it.copy(
+                                                    uibcEventsExecuted = it.uibcEventsExecuted + 1,
+                                                    lastRemoteEvent = "TAP ($px, $py)"
+                                                )
+                                            }
+                                        } else {
+                                            acc?.updateRemoteCursor(normX, normY)
+                                        }
+                                    }
                                 }
-                            }
-                            0x51 -> { // Clean Disconnect initiated from TV Box
-                                stopCastAndSelf()
-                                break
+                                0x50 -> { // Live DisplayMode Sync from TV Box
+                                    val ord = body[3].toInt() and 0xFF
+                                    val mode = DisplayMode.entries.getOrNull(ord) ?: DisplayMode.DEX_TV_DESKTOP
+                                    applyPhoneLandscapeLock(mode != DisplayMode.STANDARD_MIRROR)
+                                    SenderRuntimeBus.update {
+                                        it.copy(lastRemoteEvent = "MODE ${mode.name}")
+                                    }
+                                }
+                                0x51 -> { // Clean Disconnect initiated from TV Box
+                                    stopCastAndSelf()
+                                    return@launch
+                                }
                             }
                         }
                     }
+                } catch (_: Exception) {
+                    // Retry UIBC socket cleanly if session is still active
+                } finally {
+                    runCatching { sock?.close() }
+                    if (uibcSocket === sock) uibcSocket = null
+                }
+                if (isActive && sessionJob?.isActive == true) {
+                    delay(450L)
                 }
             }
         }

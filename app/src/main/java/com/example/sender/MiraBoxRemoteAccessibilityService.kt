@@ -41,6 +41,7 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
     private var focusHighlightView: View? = null
     private var cursorView: View? = null
     private var selectedBounds: Rect? = null
+    private var selectedRawBounds: Rect? = null
     private var activeWindowId: Int = -1
 
     private val hideFocusRunnable = Runnable { hideFocusHighlight() }
@@ -48,6 +49,7 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
 
     private data class InteractiveCandidate(
         val bounds: Rect,
+        val rawBounds: Rect,
         val isClickable: Boolean,
         val area: Long,
         val label: String
@@ -65,6 +67,7 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
             if (wid != activeWindowId) {
                 activeWindowId = wid
                 selectedBounds = null
+                selectedRawBounds = null
                 mainHandler.post { hideFocusHighlight() }
             }
         }
@@ -106,6 +109,7 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
 
     fun clearFocusHighlightOnly() {
         selectedBounds = null
+        selectedRawBounds = null
         mainHandler.post { hideFocusHighlight() }
     }
 
@@ -113,16 +117,19 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         when (hidKeyCode) {
             0x0029 -> {
                 selectedBounds = null
+                selectedRawBounds = null
                 mainHandler.post { hideFocusHighlight() }
                 performGlobalAction(GLOBAL_ACTION_BACK)
             }
             0x004A -> {
                 selectedBounds = null
+                selectedRawBounds = null
                 mainHandler.post { hideFocusHighlight() }
                 performGlobalAction(GLOBAL_ACTION_HOME)
             }
             0x0076 -> {
                 selectedBounds = null
+                selectedRawBounds = null
                 mainHandler.post { hideFocusHighlight() }
                 performGlobalAction(GLOBAL_ACTION_RECENTS)
             }
@@ -168,7 +175,7 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         if (current != null && (dir == NavDir.DOWN || dir == NavDir.UP)) {
             val scrollRect = findEnclosingVerticalScrollBounds(root, current)
             if (scrollRect != null && (chosen == null || !scrollRect.contains(chosen.bounds.centerX(), chosen.bounds.centerY()))) {
-                val scrolled = tryScrollVertical(root, forward = (dir == NavDir.DOWN))
+                val scrolled = tryScrollVertical(root, forward = (dir == NavDir.DOWN), anchor = current)
                 if (scrolled) {
                     @Suppress("DEPRECATION")
                     runCatching { root.recycle() }
@@ -179,7 +186,7 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         }
 
         if (chosen != null) {
-            selectCandidateRect(root, chosen.bounds)
+            selectCandidate(root, chosen, hInt)
             @Suppress("DEPRECATION")
             runCatching { root.recycle() }
             return
@@ -225,7 +232,7 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
             }
             NavDir.DOWN, NavDir.UP -> {
                 val forward = (dir == NavDir.DOWN)
-                val accScrolled = tryScrollVertical(root, forward)
+                val accScrolled = tryScrollVertical(root, forward, anchor = current)
                 @Suppress("DEPRECATION")
                 runCatching { root.recycle() }
                 if (accScrolled) {
@@ -332,7 +339,7 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
                     }
                 }
                 if (picked != null) {
-                    selectCandidateRect(freshRoot, picked.bounds)
+                    selectCandidate(freshRoot, picked, screenH.toInt())
                 }
             }
             @Suppress("DEPRECATION")
@@ -343,9 +350,10 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
     private fun performSpatialOkClick() {
         val root = runCatching { rootInActiveWindow }.getOrNull()
         val rect = selectedBounds ?: root?.let { findCurrentlyFocusedRect(it) }
+        val lookupRect = selectedRawBounds ?: rect
 
-        if (root != null && rect != null) {
-            val targetNode = findNodeMatchingRect(root, rect)
+        if (root != null && rect != null && lookupRect != null) {
+            val targetNode = findNodeMatchingRect(root, lookupRect)
             val clickedViaAccessibility = targetNode?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
             if (targetNode != null && targetNode !== root) {
                 @Suppress("DEPRECATION")
@@ -382,6 +390,7 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
             runCatching { root.recycle() }
             if (first != null) {
                 selectedBounds = first.bounds
+                selectedRawBounds = first.rawBounds
                 showFocusHighlight(first.bounds)
                 dispatchTapAt(first.bounds.exactCenterX(), first.bounds.exactCenterY())
                 return
@@ -395,7 +404,7 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
     private fun performPageScroll(forward: Boolean) {
         val root = runCatching { rootInActiveWindow }.getOrNull()
         val scrolled = if (root != null) {
-            val res = tryScrollVertical(root, forward)
+            val res = tryScrollVertical(root, forward, anchor = selectedBounds)
             @Suppress("DEPRECATION")
             runCatching { root.recycle() }
             res
@@ -411,6 +420,7 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
             }
         }
         selectedBounds = null
+        selectedRawBounds = null
         hideFocusHighlight()
     }
 
@@ -422,14 +432,14 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         val screenArea = (screenW.toLong() * screenH.toLong()).coerceAtLeast(1L)
         val raw = mutableListOf<InteractiveCandidate>()
 
-        fun dfs(node: AccessibilityNodeInfo) {
-            if (!node.isVisibleToUser) return
+        fun dfs(node: AccessibilityNodeInfo): Long {
+            if (!node.isVisibleToUser) return 0L
             val rect = Rect()
             node.getBoundsInScreen(rect)
             val w = rect.width()
             val h = rect.height()
             val inBounds = rect.right > 0 && rect.bottom > 0 && rect.left < screenW && rect.top < screenH
-            if (!inBounds || w < 34 || h < 34) return
+            if (!inBounds || w < 34 || h < 34) return 0L
 
             val clamped = Rect(
                 rect.left.coerceIn(0, screenW),
@@ -438,26 +448,33 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
                 rect.bottom.coerceIn(0, screenH)
             )
             val area = clamped.width().toLong() * clamped.height().toLong()
+            if (area <= 0L) return 0L
+
             val hasClickAction = node.actionList.any {
                 it.id == AccessibilityNodeInfo.ACTION_CLICK
             }
             val interactive = node.isClickable || node.isFocusable || node.isCheckable || hasClickAction
 
+            var childInteractiveArea = 0L
             val childCount = node.childCount
-            val beforeChildrenSize = raw.size
             for (i in 0 until childCount) {
                 val child = node.getChild(i) ?: continue
-                dfs(child)
+                childInteractiveArea += dfs(child)
                 @Suppress("DEPRECATION")
                 runCatching { child.recycle() }
             }
-            val addedInteractiveChild = raw.size > beforeChildrenSize
 
-            val notHugeContainer = area < (screenArea * 0.42f).toLong()
-            if (interactive && notHugeContainer && (!addedInteractiveChild || area < (screenArea * 0.14f).toLong())) {
+            // Reject giant screen/page wrappers, but KEEP real content cards (YouTube videos, FlashScore match rows)
+            // even when they contain small sub-buttons (star/menu/channel avatar covering < 42% of card area).
+            val isFullScreenWrapper = clamped.width() >= screenW * 0.94f && clamped.height() >= screenH * 0.72f
+            val notHugeContainer = area < (screenArea * 0.58f).toLong() && !isFullScreenWrapper
+            val childrenDominate = childInteractiveArea > (area * 0.42f).toLong()
+            if (interactive && notHugeContainer && (childInteractiveArea == 0L || !childrenDominate)) {
                 val label = extractNodeLabel(node)
-                raw.add(InteractiveCandidate(clamped, node.isClickable || hasClickAction, area, label))
+                raw.add(InteractiveCandidate(clamped, Rect(rect), node.isClickable || hasClickAction, area, label))
+                return area
             }
+            return minOf(area, childInteractiveArea)
         }
 
         dfs(root)
@@ -465,8 +482,11 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         val deduped = mutableListOf<InteractiveCandidate>()
         for (c in raw.sortedBy { it.area }) {
             val dup = deduped.any { existing ->
-                abs(existing.bounds.centerX() - c.bounds.centerX()) < 14 &&
+                val closeCenter = abs(existing.bounds.centerX() - c.bounds.centerX()) < 14 &&
                     abs(existing.bounds.centerY() - c.bounds.centerY()) < 14
+                val similarSize = abs(existing.bounds.width() - c.bounds.width()) <= maxOf(existing.bounds.width(), c.bounds.width()) * 0.35f &&
+                    abs(existing.bounds.height() - c.bounds.height()) <= maxOf(existing.bounds.height(), c.bounds.height()) * 0.35f
+                closeCenter && similarSize
             }
             if (!dup) deduped.add(c)
         }
@@ -618,7 +638,11 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         return bestRect
     }
 
-    private fun tryScrollVertical(root: AccessibilityNodeInfo, forward: Boolean): Boolean {
+    private fun tryScrollVertical(
+        root: AccessibilityNodeInfo,
+        forward: Boolean,
+        anchor: Rect? = null
+    ): Boolean {
         val dirAction = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (forward) AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id
@@ -627,28 +651,71 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
             else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
         }
         val fallbackAction = if (forward) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        val (_, screenH) = getScreenBounds()
 
-        fun dfs(node: AccessibilityNodeInfo): Boolean {
-            if (node.isVisibleToUser && node.isScrollable) {
+        data class ScrollTarget(val node: AccessibilityNodeInfo, val rect: Rect, val area: Long, val hasExplicitVert: Boolean)
+        val targets = mutableListOf<ScrollTarget>()
+
+        fun collect(node: AccessibilityNodeInfo) {
+            if (!node.isVisibleToUser) return
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            if (node.isScrollable) {
                 val cls = node.className?.toString().orEmpty()
-                val isHorizontalOnly = cls.contains("HorizontalScrollView", ignoreCase = true) ||
+                val looksHorizClass = cls.contains("HorizontalScrollView", ignoreCase = true) ||
                     cls.contains("ViewPager", ignoreCase = true)
-                if (!isHorizontalOnly) {
-                    val hasDir = node.actionList.any { it.id == dirAction }
-                    if (hasDir && node.performAction(dirAction)) return true
-                    if (node.performAction(fallbackAction)) return true
+                val hasExplicitVert = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    node.actionList.any {
+                        it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id ||
+                            it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id
+                    }
+                } else {
+                    false
+                }
+                val hasExplicitHorizOnly = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    val anyHoriz = node.actionList.any {
+                        it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id ||
+                            it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.id
+                    }
+                    anyHoriz && !hasExplicitVert
+                } else {
+                    false
+                }
+                if (!looksHorizClass && !hasExplicitHorizOnly && (hasExplicitVert || rect.height() >= screenH * 0.25f)) {
+                    targets.add(ScrollTarget(node, rect, rect.width().toLong() * rect.height().toLong(), hasExplicitVert))
                 }
             }
             for (i in 0 until node.childCount) {
                 val child = node.getChild(i) ?: continue
-                val ok = dfs(child)
-                @Suppress("DEPRECATION")
-                runCatching { child.recycle() }
-                if (ok) return true
+                collect(child)
             }
-            return false
         }
-        return dfs(root)
+
+        collect(root)
+
+        val ordered = if (anchor != null) {
+            val containing = targets.filter { it.rect.contains(anchor.centerX(), anchor.centerY()) }
+                .sortedBy { it.area }
+            val others = targets.filterNot { it.rect.contains(anchor.centerX(), anchor.centerY()) }
+                .sortedByDescending { it.area }
+            containing + others
+        } else {
+            targets.sortedByDescending { it.area }
+        }
+
+        var scrolled = false
+        for (target in ordered) {
+            val hasDir = target.node.actionList.any { it.id == dirAction }
+            if (hasDir && target.node.performAction(dirAction)) {
+                scrolled = true
+                break
+            }
+            if (!target.hasExplicitVert && target.node.performAction(fallbackAction)) {
+                scrolled = true
+                break
+            }
+        }
+        return scrolled
     }
 
     private fun findHorizontalPagerCenterYFrac(
@@ -748,10 +815,16 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
         return dfs(root)
     }
 
-    private fun selectCandidateRect(root: AccessibilityNodeInfo, bounds: Rect) {
-        selectedBounds = Rect(bounds)
-        val node = findNodeMatchingRect(root, bounds)
+    private fun selectCandidate(root: AccessibilityNodeInfo, candidate: InteractiveCandidate, screenH: Int) {
+        selectedBounds = Rect(candidate.bounds)
+        selectedRawBounds = Rect(candidate.rawBounds)
+        val node = findNodeMatchingRect(root, candidate.rawBounds)
         if (node != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                (candidate.bounds.top <= 48 || candidate.bounds.bottom >= screenH - 48)
+            ) {
+                node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id)
+            }
             node.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
             if (node.isFocusable) {
                 node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
@@ -761,7 +834,7 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
                 runCatching { node.recycle() }
             }
         }
-        showFocusHighlight(bounds)
+        showFocusHighlight(candidate.bounds)
     }
 
     private fun findCurrentlyFocusedRect(root: AccessibilityNodeInfo): Rect? {
@@ -780,7 +853,13 @@ class MiraBoxRemoteAccessibilityService : AccessibilityService() {
     private fun findNodeMatchingRect(root: AccessibilityNodeInfo, target: Rect): AccessibilityNodeInfo? {
         val rect = Rect()
         root.getBoundsInScreen(rect)
-        if (rect == target && (root.isClickable || root.isFocusable || root.isCheckable)) {
+        val nearMatch = abs(rect.left - target.left) <= 6 &&
+            abs(rect.top - target.top) <= 6 &&
+            abs(rect.right - target.right) <= 6 &&
+            abs(rect.bottom - target.bottom) <= 6
+        if ((rect == target || nearMatch) && (root.isClickable || root.isFocusable || root.isCheckable ||
+                root.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK })
+        ) {
             return root
         }
         for (i in 0 until root.childCount) {

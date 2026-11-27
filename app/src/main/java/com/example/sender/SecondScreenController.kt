@@ -42,6 +42,8 @@ object SecondScreenController {
     private const val KEY_ROTATION_MODIFIED = "rot_modified"
     private const val KEY_DISPLAY_MODIFIED = "display_modified"
     private const val KEY_ROOT_MODIFIED = "root_modified"
+    private const val KEY_ORIG_DENSITY_FORCED = "orig_density_forced"
+    private const val KEY_ORIG_SIZE_FORCED = "orig_size_forced"
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -104,7 +106,19 @@ object SecondScreenController {
         if (profile != SecondScreenProfile.OFF) {
             val (natW, natH) = resolveNaturalDimensionsForDevice(context, profile.width, profile.height)
             if (hasWriteSecureSettingsPermission(context)) {
-                appliedResDpi = applyForcedDisplaySizeAndDensity(natW, natH, profile.dpi)
+                if (!prefs.getBoolean(KEY_DISPLAY_MODIFIED, false)) {
+                    val prevDensity = runCatching {
+                        Settings.Secure.getString(context.contentResolver, "display_density_forced")
+                    }.getOrNull().orEmpty()
+                    val prevSize = runCatching {
+                        Settings.Global.getString(context.contentResolver, "display_size_forced")
+                    }.getOrNull().orEmpty()
+                    prefs.edit()
+                        .putString(KEY_ORIG_DENSITY_FORCED, prevDensity)
+                        .putString(KEY_ORIG_SIZE_FORCED, prevSize)
+                        .apply()
+                }
+                appliedResDpi = applyForcedDisplaySizeAndDensity(context, natW, natH, profile.dpi)
                 if (appliedResDpi) {
                     prefs.edit()
                         .putBoolean(KEY_DISPLAY_MODIFIED, true)
@@ -138,8 +152,14 @@ object SecondScreenController {
 
         if (prefs.getBoolean(KEY_DISPLAY_MODIFIED, false)) {
             if (hasWriteSecureSettingsPermission(appCtx)) {
-                clearForcedDisplaySizeAndDensity()
-                prefs.edit().putBoolean(KEY_DISPLAY_MODIFIED, false).apply()
+                val origDensity = prefs.getString(KEY_ORIG_DENSITY_FORCED, "").orEmpty().trim()
+                val origSize = prefs.getString(KEY_ORIG_SIZE_FORCED, "").orEmpty().trim()
+                restoreOrClearForcedDisplay(origSize, origDensity)
+                prefs.edit()
+                    .putBoolean(KEY_DISPLAY_MODIFIED, false)
+                    .remove(KEY_ORIG_DENSITY_FORCED)
+                    .remove(KEY_ORIG_SIZE_FORCED)
+                    .apply()
             } else if (prefs.getBoolean(KEY_ROOT_MODIFIED, false)) {
                 clearViaRootShell()
                 prefs.edit()
@@ -232,50 +252,94 @@ object SecondScreenController {
     }
 
     @SuppressLint("PrivateApi")
-    private fun applyForcedDisplaySizeAndDensity(width: Int, height: Int, dpi: Int): Boolean {
-        return runCatching {
+    @Suppress("DEPRECATION")
+    private fun applyForcedDisplaySizeAndDensity(
+        context: Context,
+        width: Int,
+        height: Int,
+        dpi: Int
+    ): Boolean {
+        val wms = runCatching {
             val wmgClass = Class.forName("android.view.WindowManagerGlobal")
-            val getWms = wmgClass.getMethod("getWindowManagerService")
-            val wms = getWms.invoke(null) ?: return@runCatching false
+            wmgClass.getMethod("getWindowManagerService").invoke(null)
+        }.getOrNull() ?: return false
 
-            val setSize = wms.javaClass.getMethod(
+        val sizeApplied = runCatching {
+            wms.javaClass.getMethod(
                 "setForcedDisplaySize",
                 Int::class.javaPrimitiveType,
                 Int::class.javaPrimitiveType,
                 Int::class.javaPrimitiveType
-            )
-            setSize.invoke(wms, Display.DEFAULT_DISPLAY, width, height)
-
-            val userId = Process.myUserHandle().hashCode()
-            runCatching {
-                val setDensityForUser = wms.javaClass.getMethod(
-                    "setForcedDisplayDensityForUser",
-                    Int::class.javaPrimitiveType,
-                    Int::class.javaPrimitiveType,
-                    Int::class.javaPrimitiveType
-                )
-                setDensityForUser.invoke(wms, Display.DEFAULT_DISPLAY, dpi, userId)
-            }.onFailure {
-                val setDensity = wms.javaClass.getMethod(
-                    "setForcedDisplayDensity",
-                    Int::class.javaPrimitiveType,
-                    Int::class.javaPrimitiveType
-                )
-                setDensity.invoke(wms, Display.DEFAULT_DISPLAY, dpi)
-            }
+            ).invoke(wms, Display.DEFAULT_DISPLAY, width, height)
             true
         }.getOrDefault(false)
+
+        // If size override was rejected, scale DPI dynamically relative to actual native short edge so smallestWidth ~ 700dp
+        val targetDpi = if (sizeApplied) {
+            dpi
+        } else {
+            val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            val dm = DisplayMetrics()
+            wm.defaultDisplay.getRealMetrics(dm)
+            val shortEdge = minOf(dm.widthPixels, dm.heightPixels)
+            ((shortEdge * 160) / 700).coerceIn(160, 360)
+        }
+
+        val densityApplied = applyForcedDensityOnly(wms, targetDpi)
+        return sizeApplied || densityApplied
     }
 
     @SuppressLint("PrivateApi")
-    private fun clearForcedDisplaySizeAndDensity() {
-        runCatching {
+    private fun applyForcedDensityOnly(wms: Any, dpi: Int): Boolean {
+        val userId = Process.myUserHandle().hashCode()
+        return runCatching {
+            wms.javaClass.getMethod(
+                "setForcedDisplayDensityForUser",
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType
+            ).invoke(wms, Display.DEFAULT_DISPLAY, dpi, userId)
+            true
+        }.getOrElse {
+            runCatching {
+                wms.javaClass.getMethod(
+                    "setForcedDisplayDensity",
+                    Int::class.javaPrimitiveType,
+                    Int::class.javaPrimitiveType
+                ).invoke(wms, Display.DEFAULT_DISPLAY, dpi)
+                true
+            }.getOrDefault(false)
+        }
+    }
+
+    @SuppressLint("PrivateApi")
+    private fun restoreOrClearForcedDisplay(origSize: String, origDensity: String) {
+        val wms = runCatching {
             val wmgClass = Class.forName("android.view.WindowManagerGlobal")
-            val wms = wmgClass.getMethod("getWindowManagerService").invoke(null) ?: return
+            wmgClass.getMethod("getWindowManagerService").invoke(null)
+        }.getOrNull() ?: return
+
+        val sizeParts = origSize.split(",").mapNotNull { it.trim().toIntOrNull() }
+        if (sizeParts.size == 2 && sizeParts[0] > 0 && sizeParts[1] > 0) {
+            runCatching {
+                wms.javaClass.getMethod(
+                    "setForcedDisplaySize",
+                    Int::class.javaPrimitiveType,
+                    Int::class.javaPrimitiveType,
+                    Int::class.javaPrimitiveType
+                ).invoke(wms, Display.DEFAULT_DISPLAY, sizeParts[0], sizeParts[1])
+            }
+        } else {
             runCatching {
                 wms.javaClass.getMethod("clearForcedDisplaySize", Int::class.javaPrimitiveType)
                     .invoke(wms, Display.DEFAULT_DISPLAY)
             }
+        }
+
+        val prevDpi = origDensity.toIntOrNull()
+        if (prevDpi != null && prevDpi > 0) {
+            applyForcedDensityOnly(wms, prevDpi)
+        } else {
             val userId = Process.myUserHandle().hashCode()
             runCatching {
                 wms.javaClass.getMethod(
@@ -290,6 +354,11 @@ object SecondScreenController {
                 }
             }
         }
+    }
+
+    @SuppressLint("PrivateApi")
+    private fun clearForcedDisplaySizeAndDensity() {
+        restoreOrClearForcedDisplay(origSize = "", origDensity = "")
     }
 
     private fun hasSuBinary(): Boolean {
